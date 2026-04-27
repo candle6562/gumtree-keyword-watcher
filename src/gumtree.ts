@@ -18,6 +18,7 @@ interface ClientDataAd {
   price?: string;
   postedDate?: string;
   location?: string;
+  date?: number;
 }
 
 interface ClientData {
@@ -41,8 +42,9 @@ function parseFromClientData(html: string): RawListing[] {
       url: toAbsoluteUrl(ad.path),
       price: ad.price,
       postedDate: ad.postedDate,
-      location: ad.location
-    }));
+      location: ad.location,
+      date: ad.date
+    })).sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
   } catch {
     return [];
   }

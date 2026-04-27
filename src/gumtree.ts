@@ -12,23 +12,50 @@ function normalizeTitle(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-export function parseGumtreeResults(html: string): RawListing[] {
+interface ClientDataAd {
+  title: string;
+  path: string;
+  price?: string;
+}
+
+interface ClientData {
+  resultsPage?: {
+    searchAds?: ClientDataAd[];
+  };
+}
+
+function parseFromClientData(html: string): RawListing[] {
+  const clientDataMatch = html.match(/window\.clientData\s*=\s*"([^"]+)"/);
+  if (!clientDataMatch) return [];
+
+  try {
+    const decoded = decodeURIComponent(clientDataMatch[1]);
+    const data: ClientData = JSON.parse(decoded);
+    const ads = data.resultsPage?.searchAds;
+    if (!ads || ads.length === 0) return [];
+
+    return ads.map((ad) => ({
+      title: normalizeTitle(ad.title),
+      url: toAbsoluteUrl(ad.path)
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function parseFromHtml(html: string): RawListing[] {
   const $ = load(html);
   const found = new Map<string, RawListing>();
 
   $("a[href*='/p/']").each((_, element) => {
     const href = $(element).attr("href");
-    if (!href) {
-      return;
-    }
+    if (!href) return;
 
     const titleFromAttr = $(element).attr("title");
     const titleFromChildren =
       $(element).find("h1, h2, h3, h4, span, div").first().text() || $(element).text();
     const title = normalizeTitle(titleFromAttr || titleFromChildren || "");
-    if (!title) {
-      return;
-    }
+    if (!title) return;
 
     const url = toAbsoluteUrl(href);
     if (!found.has(url)) {
@@ -37,6 +64,12 @@ export function parseGumtreeResults(html: string): RawListing[] {
   });
 
   return Array.from(found.values());
+}
+
+export function parseGumtreeResults(html: string): RawListing[] {
+  const fromClientData = parseFromClientData(html);
+  if (fromClientData.length > 0) return fromClientData;
+  return parseFromHtml(html);
 }
 
 export async function fetchGumtreeHtml(postcode: string, keyword: string, timeoutMs: number): Promise<string> {

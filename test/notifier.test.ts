@@ -17,6 +17,8 @@ describe("WhatsappNotifier", () => {
       false,
       "https://example.com/webhook",
       "token",
+      undefined,
+      undefined,
       5_000
     );
 

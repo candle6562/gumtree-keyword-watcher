@@ -34,6 +34,8 @@ export class Monitor {
       config.dryRun,
       config.whatsappAlertWebhookUrl,
       config.whatsappAlertWebhookToken,
+      config.openclawGatewayToken,
+      config.openclawToolUrl,
       config.httpTimeoutMs
     );
     this.diagnostics = new DiagnosticsSink(config.diagnosticsLogPath);

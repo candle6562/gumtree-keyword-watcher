@@ -88,7 +88,7 @@ describe("loadConfig", () => {
         WHATSAPP_TO: "07791851722",
         KEYWORDS: "lawnmower"
       })
-    ).toThrow("Configure either WHATSAPP_ALERT_WEBHOOK_URL or TWILIO_ACCOUNT_SID+TWILIO_AUTH_TOKEN");
+    ).toThrow("Configure WHATSAPP_ALERT_WEBHOOK_URL, OPENCLAW_GATEWAY_TOKEN, or TWILIO_ACCOUNT_SID+TWILIO_AUTH_TOKEN");
   });
 
   it("requires token when binding observability to non-loopback host", () => {

@@ -2,7 +2,7 @@ import Twilio from "twilio";
 import type { Listing } from "./types.js";
 
 export interface TransportReadinessSignal {
-  mode: "dry_run" | "webhook" | "twilio" | "unconfigured";
+  mode: "dry_run" | "openclaw" | "webhook" | "twilio" | "unconfigured";
   ready: boolean;
 }
 
@@ -25,6 +25,8 @@ export class WhatsappNotifier {
     private readonly dryRun = false,
     private readonly webhookUrl?: string,
     private readonly webhookToken?: string,
+    private readonly openclawGatewayToken?: string,
+    private readonly openclawToolUrl = "http://127.0.0.1:28889/tools/invoke",
     private readonly httpTimeoutMs = 15_000
   ) {
     if (accountSid && authToken) {
@@ -39,27 +41,18 @@ export class WhatsappNotifier {
 
   private computeReadiness(): TransportReadinessSignal {
     if (this.dryRun) {
-      return {
-        mode: "dry_run",
-        ready: false
-      };
+      return { mode: "dry_run", ready: false };
+    }
+    if (this.openclawGatewayToken) {
+      return { mode: "openclaw", ready: true };
     }
     if (this.webhookUrl) {
-      return {
-        mode: "webhook",
-        ready: true
-      };
+      return { mode: "webhook", ready: true };
     }
     if (this.client) {
-      return {
-        mode: "twilio",
-        ready: true
-      };
+      return { mode: "twilio", ready: true };
     }
-    return {
-      mode: "unconfigured",
-      ready: false
-    };
+    return { mode: "unconfigured", ready: false };
   }
 
   async sendListingAlert(listing: Listing): Promise<void> {
@@ -74,6 +67,31 @@ export class WhatsappNotifier {
       return;
     }
 
+    if (this.openclawGatewayToken) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.httpTimeoutMs);
+      const target = this.to.replace(/^whatsapp:/, "");
+      const response = await fetch(this.openclawToolUrl, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.openclawGatewayToken}`
+        },
+        body: JSON.stringify({
+          tool: "message",
+          action: "send",
+          args: { channel: "whatsapp", target, message: body }
+        })
+      }).finally(() => clearTimeout(timer));
+
+      if (!response.ok) {
+        const errText = truncate((await response.text()).trim(), 500);
+        throw new Error(`OpenClaw notifier failed: status=${response.status} body=${errText || "<empty>"}`);
+      }
+      return;
+    }
+
     if (this.webhookUrl) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.httpTimeoutMs);
@@ -84,11 +102,7 @@ export class WhatsappNotifier {
           "content-type": "application/json",
           ...(this.webhookToken ? { authorization: `Bearer ${this.webhookToken}` } : {})
         },
-        body: JSON.stringify({
-          to: this.to,
-          body,
-          listing
-        })
+        body: JSON.stringify({ to: this.to, body, listing })
       }).finally(() => {
         clearTimeout(timer);
       });

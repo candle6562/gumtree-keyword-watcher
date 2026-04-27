@@ -8,6 +8,8 @@ const envSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().trim().optional(),
   WHATSAPP_ALERT_WEBHOOK_URL: z.string().trim().optional(),
   WHATSAPP_ALERT_WEBHOOK_TOKEN: z.string().trim().optional(),
+  OPENCLAW_GATEWAY_TOKEN: z.string().trim().optional(),
+  OPENCLAW_TOOL_URL: z.string().trim().default("http://127.0.0.1:28889/tools/invoke"),
   KEYWORDS: z.string().trim().optional(),
   SCRAPE_INTERVAL_SECONDS: z.coerce.number().int().positive().default(3600),
   HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
@@ -70,6 +72,8 @@ export interface AppConfig {
   twilioAuthToken?: string;
   whatsappAlertWebhookUrl?: string;
   whatsappAlertWebhookToken?: string;
+  openclawGatewayToken?: string;
+  openclawToolUrl: string;
   dryRun: boolean;
 }
 
@@ -98,7 +102,6 @@ export function normalizeWhatsappAddress(raw: string): string {
     return `whatsapp:+${compact.slice(2)}`;
   }
   if (/^0\d+$/.test(compact)) {
-    // UK-local style input like 07791851722 -> +447791851722
     return `whatsapp:+44${compact.slice(1)}`;
   }
   if (/^\d+$/.test(compact)) {
@@ -112,10 +115,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = envSchema.parse(env);
   const hasWebhook = Boolean(parsed.WHATSAPP_ALERT_WEBHOOK_URL);
   const hasTwilio = Boolean(parsed.TWILIO_ACCOUNT_SID && parsed.TWILIO_AUTH_TOKEN);
+  const hasOpenClaw = Boolean(parsed.OPENCLAW_GATEWAY_TOKEN);
 
-  if (!parsed.DRY_RUN && !hasWebhook && !hasTwilio) {
+  if (!parsed.DRY_RUN && !hasWebhook && !hasTwilio && !hasOpenClaw) {
     throw new Error(
-      "Configure either WHATSAPP_ALERT_WEBHOOK_URL or TWILIO_ACCOUNT_SID+TWILIO_AUTH_TOKEN (or set DRY_RUN=true)"
+      "Configure WHATSAPP_ALERT_WEBHOOK_URL, OPENCLAW_GATEWAY_TOKEN, or TWILIO_ACCOUNT_SID+TWILIO_AUTH_TOKEN (or set DRY_RUN=true)"
     );
   }
 
@@ -152,6 +156,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     twilioAuthToken: parsed.TWILIO_AUTH_TOKEN,
     whatsappAlertWebhookUrl: parsed.WHATSAPP_ALERT_WEBHOOK_URL,
     whatsappAlertWebhookToken: parsed.WHATSAPP_ALERT_WEBHOOK_TOKEN,
-    dryRun: parsed.DRY_RUN
+    openclawGatewayToken: parsed.OPENCLAW_GATEWAY_TOKEN,
+    openclawToolUrl: parsed.OPENCLAW_TOOL_URL,
+    dryRun: parsed.DRY_RUN ?? false,
   };
 }

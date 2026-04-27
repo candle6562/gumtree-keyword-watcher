@@ -13,6 +13,23 @@ function truncate(value: string, maxLength: number): string {
   return `${value.slice(0, maxLength)}...`;
 }
 
+function formatListingForMessage(listing: Listing): string {
+  const parts = [
+    listing.title,
+    listing.price ? `💷 ${listing.price}` : null,
+    listing.postedDate ? `📅 ${listing.postedDate}` : null,
+    listing.location ? `📍 ${listing.location}` : null,
+    listing.url
+  ].filter(Boolean);
+  return parts.join("\n");
+}
+
+function formatBatchMessage(keyword: string, listings: Listing[]): string {
+  const header = `🔔 Gumtree ${keyword.toUpperCase()} alerts — ${listings.length} new listing${listings.length !== 1 ? "s" : ""}:\n`;
+  const items = listings.map((l, i) => `${i + 1}. ${formatListingForMessage(l)}`).join("\n\n");
+  return header + items;
+}
+
 export class WhatsappNotifier {
   private readonly client?: ReturnType<typeof Twilio>;
   private readonly readiness: TransportReadinessSignal;
@@ -56,11 +73,7 @@ export class WhatsappNotifier {
   }
 
   async sendListingAlert(listing: Listing): Promise<void> {
-    const body = [
-      `Gumtree match: ${listing.matchedKeyword}`,
-      listing.title,
-      listing.url
-    ].join("\n");
+    const body = formatListingForMessage(listing);
 
     if (this.dryRun) {
       console.log(`[DRY_RUN] WhatsApp alert to ${this.to}\n${body}`);
@@ -70,7 +83,7 @@ export class WhatsappNotifier {
     if (this.openclawGatewayToken) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.httpTimeoutMs);
-      const target = this.to.replace(/^whatsapp:/, "");
+      const target = this.to.startsWith("whatsapp:") ? this.to : `whatsapp:${this.to}`;
       const response = await fetch(this.openclawToolUrl, {
         method: "POST",
         signal: controller.signal,
@@ -106,6 +119,73 @@ export class WhatsappNotifier {
       }).finally(() => {
         clearTimeout(timer);
       });
+
+      if (!response.ok) {
+        const bodyText = truncate((await response.text()).trim(), 500);
+        throw new Error(
+          `Webhook notifier failed: status=${response.status} statusText=${response.statusText} body=${bodyText || "<empty>"}`
+        );
+      }
+      return;
+    }
+
+    if (!this.client) {
+      throw new Error("No WhatsApp notifier configured");
+    }
+
+    await this.client.messages.create({
+      body,
+      from: this.from,
+      to: this.to
+    });
+  }
+
+  async sendListingAlertBatch(keyword: string, listings: Listing[]): Promise<void> {
+    if (listings.length === 0) return;
+    const body = formatBatchMessage(keyword, listings);
+
+    if (this.dryRun) {
+      console.log(`[DRY_RUN] Batch WhatsApp alert to ${this.to} (${listings.length} items)\n${body}`);
+      return;
+    }
+
+    if (this.openclawGatewayToken) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.httpTimeoutMs);
+      const target = this.to.startsWith("whatsapp:") ? this.to : `whatsapp:${this.to}`;
+      const response = await fetch(this.openclawToolUrl, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.openclawGatewayToken}`
+        },
+        body: JSON.stringify({
+          tool: "message",
+          action: "send",
+          args: { channel: "whatsapp", target, message: body }
+        })
+      }).finally(() => clearTimeout(timer));
+
+      if (!response.ok) {
+        const errText = truncate((await response.text()).trim(), 500);
+        throw new Error(`OpenClaw notifier failed: status=${response.status} body=${errText || "<empty>"}`);
+      }
+      return;
+    }
+
+    if (this.webhookUrl) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.httpTimeoutMs);
+      const response = await fetch(this.webhookUrl, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "content-type": "application/json",
+          ...(this.webhookToken ? { authorization: `Bearer ${this.webhookToken}` } : {})
+        },
+        body: JSON.stringify({ to: this.to, body, listings, keyword })
+      }).finally(() => clearTimeout(timer));
 
       if (!response.ok) {
         const bodyText = truncate((await response.text()).trim(), 500);

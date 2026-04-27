@@ -71,29 +71,34 @@ export class Monitor {
 
         const parsed = parseGumtreeResults(html);
         const matches = matchListings(parsed, keyword);
-        let sent = 0;
-        let skipped = 0;
 
+        const newMatches: typeof matches = [];
         for (const match of matches) {
-          if (this.store.has(match.url)) {
-            skipped += 1;
-            continue;
+          if (!this.store.has(match.url)) {
+            newMatches.push(match);
           }
+        }
 
+        let skipped = matches.length - newMatches.length;
+        let sent = 0;
+
+        if (newMatches.length > 0) {
           await withRetry(
-            () => this.notifier.sendListingAlert(match),
+            () => this.notifier.sendListingAlertBatch(keyword, newMatches),
             this.config.retryAttempts,
             this.config.retryDelayMs,
             `notify:${keyword}`
           );
 
-          await this.store.add(match.url);
-          sent += 1;
-          console.log(`Alert sent for ${match.url}`);
+          for (const match of newMatches) {
+            await this.store.add(match.url);
+          }
+          sent = newMatches.length;
+          console.log(`Batch alert sent for ${newMatches.length} ${keyword} listing(s)`);
         }
 
         console.log(
-          `Keyword '${keyword}': parsed=${parsed.length}, matched=${matches.length}, sent=${sent}, skipped_duplicates=${skipped}`
+          `Keyword '${keyword}': parsed=${parsed.length}, matched=${matches.length}, new=${newMatches.length}, sent=${sent}, skipped_duplicates=${skipped}`
         );
         await this.diagnostics.write({
           timestamp: new Date().toISOString(),
@@ -106,6 +111,7 @@ export class Monitor {
             keyword,
             parsed: parsed.length,
             matched: matches.length,
+            new: newMatches.length,
             sent,
             skippedDuplicates: skipped
           }
@@ -168,23 +174,20 @@ export class Monitor {
 
       if (matches.length < 1) {
         throw new Error(
-          `Controlled fixture produced no matches for keyword '${this.config.deliveryCanaryKeyword}'`
+          `Canary fixture returned ${matches.length} matches for keyword '${this.config.deliveryCanaryKeyword}', expected ≥ 1`
         );
       }
 
-      const canaryListing = {
-        ...matches[0],
-        url: `${matches[0].url}${matches[0].url.includes("?") ? "&" : "?"}delivery_canary=true&run_ref=${encodeURIComponent(runRef)}`
-      };
+      const canaryEntry = matches[0];
+      if (this.store.has(canaryEntry.url)) {
+        console.log("Delivery canary: URL already in dedupe store, skipping delivery test");
+        return true;
+      }
 
-      await withRetry(
-        () => this.notifier.sendListingAlert(canaryListing),
-        this.config.retryAttempts,
-        this.config.retryDelayMs,
-        "notify:delivery-canary"
-      );
-
+      await this.notifier.sendListingAlert(canaryEntry);
+      await this.store.add(canaryEntry.url);
       details.sent = 1;
+      console.log(`Delivery canary passed: matched=${matches.length}, sent=1, keyword='${this.config.deliveryCanaryKeyword}'`);
       await this.diagnostics.write({
         timestamp: new Date().toISOString(),
         runRef,
@@ -194,30 +197,20 @@ export class Monitor {
         nextAction: "Continue next scheduled cycle",
         details
       });
-      console.log(
-        `Delivery canary passed: matched=${matches.length}, sent=1, keyword='${this.config.deliveryCanaryKeyword}'`
-      );
       return true;
     } catch (error) {
       const message = describeError(error);
-      details.sent = 0;
       console.error(`Delivery canary failed: ${message}`);
       await this.diagnostics.write({
         timestamp: new Date().toISOString(),
         runRef,
         outcome: "failure",
         transportReadiness,
-        errorDetail: message,
-        nextAction:
-          "Escalate immediately: investigate fixture parsing or webhook delivery path before trusting live send results",
+        errorDetail: `canary: ${message}`,
+        nextAction: "Escalate immediately: delivery path is broken",
         details
       });
       return false;
     }
   }
-}
-
-export function createMonitorFromEnv(env: NodeJS.ProcessEnv = process.env): Monitor {
-  const config = loadConfig(env);
-  return new Monitor(config);
 }

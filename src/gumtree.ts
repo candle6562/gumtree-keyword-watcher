@@ -16,6 +16,8 @@ interface ClientDataAd {
   title: string;
   path: string;
   price?: string;
+  postedDate?: string;
+  location?: string;
 }
 
 interface ClientData {
@@ -36,7 +38,10 @@ function parseFromClientData(html: string): RawListing[] {
 
     return ads.map((ad) => ({
       title: normalizeTitle(ad.title),
-      url: toAbsoluteUrl(ad.path)
+      url: toAbsoluteUrl(ad.path),
+      price: ad.price,
+      postedDate: ad.postedDate,
+      location: ad.location
     }));
   } catch {
     return [];

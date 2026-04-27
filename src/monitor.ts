@@ -141,9 +141,10 @@ export class Monitor {
       expectedMinimumSent: 1
     };
 
-    if (transportReadiness.mode !== "webhook" || !transportReadiness.ready) {
+    const readyTransport = transportReadiness.mode === "openclaw" || transportReadiness.mode === "webhook";
+    if (!readyTransport || !transportReadiness.ready) {
       const errorDetail =
-        "Canary readiness gate failed: requires transportReadiness.mode=webhook and transportReadiness.ready=true";
+        "Canary readiness gate failed: requires transportReadiness.mode=openclaw|webhook and transportReadiness.ready=true";
       console.error(errorDetail);
       await this.diagnostics.write({
         timestamp: new Date().toISOString(),
@@ -152,7 +153,7 @@ export class Monitor {
         transportReadiness,
         errorDetail,
         nextAction:
-          "Escalate immediately: canary cannot validate delivery path until webhook transport readiness is restored",
+          "Escalate immediately: canary cannot validate delivery path until openclaw or webhook transport readiness is restored",
         details
       });
       return false;

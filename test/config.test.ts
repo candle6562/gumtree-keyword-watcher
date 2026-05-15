@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 import { loadConfig, normalizeWhatsappAddress, parseKeywords } from "../src/config.js";
 
 describe("parseKeywords", () => {
-  it("always includes lawnmower and deduplicates", () => {
+  it("includes the default keyword and deduplicates", () => {
     expect(parseKeywords("chainsaw,lawnmower, strimmer")).toEqual([
       "lawnmower",
       "chainsaw",
       "strimmer"
     ]);
+  });
+
+  it("allows disabling the default keyword", () => {
+    expect(parseKeywords("robot mower, automower", "")).toEqual(["robot mower", "automower"]);
   });
 });
 

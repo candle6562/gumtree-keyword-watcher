@@ -11,6 +11,7 @@ const envSchema = z.object({
   OPENCLAW_GATEWAY_TOKEN: z.string().trim().optional(),
   OPENCLAW_TOOL_URL: z.string().trim().default("http://127.0.0.1:28889/tools/invoke"),
   KEYWORDS: z.string().trim().optional(),
+  DEFAULT_KEYWORD: z.string().trim().optional().default("lawnmower"),
   SCRAPE_INTERVAL_SECONDS: z.coerce.number().int().positive().default(3600),
   HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
   RETRY_ATTEMPTS: z.coerce.number().int().positive().default(3),
@@ -77,12 +78,13 @@ export interface AppConfig {
   dryRun: boolean;
 }
 
-export function parseKeywords(raw: string | undefined): string[] {
+export function parseKeywords(raw: string | undefined, defaultKeyword = "lawnmower"): string[] {
   const extras = (raw ?? "")
     .split(",")
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
-  return Array.from(new Set(["lawnmower", ...extras]));
+  const defaults = defaultKeyword.trim() ? [defaultKeyword.trim().toLowerCase()] : [];
+  return Array.from(new Set([...defaults, ...extras]));
 }
 
 export function normalizeWhatsappAddress(raw: string): string {
@@ -133,7 +135,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   return {
     postcode: parsed.POSTCODE,
-    keywords: parseKeywords(parsed.KEYWORDS),
+    keywords: parseKeywords(parsed.KEYWORDS, parsed.DEFAULT_KEYWORD),
     scrapeIntervalSeconds: parsed.SCRAPE_INTERVAL_SECONDS,
     httpTimeoutMs: parsed.HTTP_TIMEOUT_MS,
     retryAttempts: parsed.RETRY_ATTEMPTS,

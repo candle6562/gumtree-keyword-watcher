@@ -38,6 +38,22 @@ const envSchema = z.object({
   DETAIL_MAX_PER_CYCLE: z.coerce.number().int().nonnegative().default(15),
   DETAIL_DELAY_MS: z.coerce.number().int().nonnegative().default(1500),
   DETAIL_CACHE_PATH: z.string().trim().default(".data/listing-details.json"),
+  OPENROUTER_API_KEY: z.string().trim().optional(),
+  OPENROUTER_TEXT_MODEL: z.string().trim().default("deepseek/deepseek-v4-flash"),
+  // DeepSeek is text-only, so plate reading needs a separate vision model.
+  OPENROUTER_VISION_MODEL: z.string().trim().default("google/gemini-2.5-flash-lite"),
+  OPENROUTER_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
+  // Photo analysis is only used to read number plates. Off by default: cheap
+  // (~$0.00007/listing) but an extra failure mode, and descriptions carry most
+  // of the signal. Turn on when text-only triage produces too many false hits.
+  TRIAGE_VISION_ENABLED: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => value === "1" || value?.toLowerCase() === "true"),
+  TRIAGE_VISION_MIN_SCORE: z.coerce.number().int().min(0).max(100).default(60),
+  TRIAGE_CACHE_PATH: z.string().trim().default(".data/triage-results.json"),
+  TRIAGE_SPEC_DIR: z.string().trim().default("config/specs"),
   DEGRADED_ALERT_AFTER_FAILURES: z.coerce.number().int().positive().default(3),
   MARKETPLACE_AREA_ID: z.string().trim().optional(),
   MARKET_WATCHES_FILE: z.string().trim().optional(),
@@ -134,6 +150,14 @@ export interface AppConfig {
   detailMaxPerCycle: number;
   detailDelayMs: number;
   detailCachePath: string;
+  openrouterApiKey?: string;
+  openrouterTextModel: string;
+  openrouterVisionModel: string;
+  openrouterTimeoutMs: number;
+  triageVisionEnabled: boolean;
+  triageVisionMinScore: number;
+  triageCachePath: string;
+  triageSpecDir: string;
   marketplaceAreaId?: string;
   marketplaceFacebookEnabled: boolean;
 }
@@ -227,6 +251,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     detailMaxPerCycle: parsed.DETAIL_MAX_PER_CYCLE,
     detailDelayMs: parsed.DETAIL_DELAY_MS,
     detailCachePath: parsed.DETAIL_CACHE_PATH,
+    openrouterApiKey: parsed.OPENROUTER_API_KEY,
+    openrouterTextModel: parsed.OPENROUTER_TEXT_MODEL,
+    openrouterVisionModel: parsed.OPENROUTER_VISION_MODEL,
+    openrouterTimeoutMs: parsed.OPENROUTER_TIMEOUT_MS,
+    triageVisionEnabled: parsed.TRIAGE_VISION_ENABLED ?? false,
+    triageVisionMinScore: parsed.TRIAGE_VISION_MIN_SCORE,
+    triageCachePath: parsed.TRIAGE_CACHE_PATH,
+    triageSpecDir: parsed.TRIAGE_SPEC_DIR,
     degradedAlertAfterFailures: parsed.DEGRADED_ALERT_AFTER_FAILURES,
     marketplaceAreaId: parsed.MARKETPLACE_AREA_ID,
     marketplaceFacebookEnabled: parsed.MARKETPLACE_FACEBOOK_ENABLED ?? false,

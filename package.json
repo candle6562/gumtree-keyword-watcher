@@ -18,12 +18,15 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "verify": "bash scripts/verify.sh",
-    "detail": "tsx bin/detail.ts"
+    "detail": "tsx bin/detail.ts",
+    "triage": "tsx bin/triage.ts",
+    "triage:run": "tsx bin/triage-run.ts"
   },
   "dependencies": {
     "cheerio": "^1.1.2",
     "dotenv": "^16.6.1",
     "twilio": "^5.8.2",
+    "yaml": "^2.9.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { loadWatches, primaryWatch } from "./watches.js";
 
 const envSchema = z.object({
   POSTCODE: z.string().trim().min(1, "POSTCODE is required"),
@@ -10,8 +11,41 @@ const envSchema = z.object({
   WHATSAPP_ALERT_WEBHOOK_TOKEN: z.string().trim().optional(),
   OPENCLAW_GATEWAY_TOKEN: z.string().trim().optional(),
   OPENCLAW_TOOL_URL: z.string().trim().default("http://127.0.0.1:28889/tools/invoke"),
-  KEYWORDS: z.string().trim().optional(),
-  DEFAULT_KEYWORD: z.string().trim().optional().default("lawnmower"),
+  BROWSER_WORKER_URL: z.string().trim().default("http://100.95.126.123:3877"),
+  BROWSER_WORKER_TOKEN: z.string().trim().optional(),
+  BROWSER_WORKER_AUTOSTART_ENABLED: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => {
+      if (value === undefined) return true;
+      return value === "1" || value.toLowerCase() === "true";
+    }),
+  // The worker runs natively on the Windows host; WSL reaches it through interop.
+  BROWSER_WORKER_AUTOSTART_COMMAND: z
+    .string()
+    .trim()
+    .default('/mnt/c/Windows/System32/cmd.exe /c "cd /d C:\\fb-browser-worker && npm.cmd run start:if-needed"'),
+  BROWSER_WORKER_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  BROWSER_WORKER_STARTUP_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
+  BROWSER_WORKER_RESTART_COOLDOWN_MS: z.coerce.number().int().nonnegative().default(300000),
+  HEALTH_STATE_PATH: z.string().trim().default(".data/health-state.json"),
+  DETAIL_FETCH_ENABLED: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => value === "1" || value?.toLowerCase() === "true"),
+  DETAIL_MAX_PER_CYCLE: z.coerce.number().int().nonnegative().default(15),
+  DETAIL_DELAY_MS: z.coerce.number().int().nonnegative().default(1500),
+  DETAIL_CACHE_PATH: z.string().trim().default(".data/listing-details.json"),
+  DEGRADED_ALERT_AFTER_FAILURES: z.coerce.number().int().positive().default(3),
+  MARKETPLACE_AREA_ID: z.string().trim().optional(),
+  MARKET_WATCHES_FILE: z.string().trim().optional(),
+  MARKETPLACE_FACEBOOK_ENABLED: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => value === "1" || value?.toLowerCase() === "true"),
   SCRAPE_INTERVAL_SECONDS: z.coerce.number().int().positive().default(3600),
   HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
   RETRY_ATTEMPTS: z.coerce.number().int().positive().default(3),
@@ -32,6 +66,15 @@ const envSchema = z.object({
     }),
   DELIVERY_CANARY_FIXTURE_PATH: z.string().trim().default("test/fixtures/gumtree-search-stable.html"),
   DELIVERY_CANARY_KEYWORD: z.string().trim().min(1).default("lawnmower"),
+  MARKET_WATCH_GROUP_NAME: z.string().trim().min(1).default("market watch"),
+  MARKET_WATCH_SEND_NO_CHANGES: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => {
+      if (value === undefined) return undefined;
+      return value === "1" || value.toLowerCase() === "true";
+    }),
   HEALTH_METRICS_ENABLED: z
     .string()
     .trim()
@@ -62,6 +105,8 @@ export interface AppConfig {
   deliveryCanaryEnabled: boolean;
   deliveryCanaryFixturePath: string;
   deliveryCanaryKeyword: string;
+  marketWatchGroupName: string;
+  marketWatchSendNoChanges: boolean;
   healthMetricsEnabled: boolean;
   healthMetricsHost: string;
   healthMetricsPort: number;
@@ -76,15 +121,21 @@ export interface AppConfig {
   openclawGatewayToken?: string;
   openclawToolUrl: string;
   dryRun: boolean;
-}
-
-export function parseKeywords(raw: string | undefined, defaultKeyword = "lawnmower"): string[] {
-  const extras = (raw ?? "")
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-  const defaults = defaultKeyword.trim() ? [defaultKeyword.trim().toLowerCase()] : [];
-  return Array.from(new Set([...defaults, ...extras]));
+  browserWorkerUrl: string;
+  browserWorkerToken?: string;
+  browserWorkerAutostartEnabled: boolean;
+  browserWorkerAutostartCommand: string;
+  browserWorkerHealthTimeoutMs: number;
+  browserWorkerStartupTimeoutMs: number;
+  browserWorkerRestartCooldownMs: number;
+  healthStatePath: string;
+  degradedAlertAfterFailures: number;
+  detailFetchEnabled: boolean;
+  detailMaxPerCycle: number;
+  detailDelayMs: number;
+  detailCachePath: string;
+  marketplaceAreaId?: string;
+  marketplaceFacebookEnabled: boolean;
 }
 
 export function normalizeWhatsappAddress(raw: string): string {
@@ -115,6 +166,7 @@ export function normalizeWhatsappAddress(raw: string): string {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = envSchema.parse(env);
+  const watch = primaryWatch(loadWatches(parsed.MARKET_WATCHES_FILE));
   const hasWebhook = Boolean(parsed.WHATSAPP_ALERT_WEBHOOK_URL);
   const hasTwilio = Boolean(parsed.TWILIO_ACCOUNT_SID && parsed.TWILIO_AUTH_TOKEN);
   const hasOpenClaw = Boolean(parsed.OPENCLAW_GATEWAY_TOKEN);
@@ -135,7 +187,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   return {
     postcode: parsed.POSTCODE,
-    keywords: parseKeywords(parsed.KEYWORDS, parsed.DEFAULT_KEYWORD),
+    keywords: watch?.terms.length ? watch.terms : [parsed.MARKET_WATCH_GROUP_NAME.trim().toLowerCase()],
     scrapeIntervalSeconds: parsed.SCRAPE_INTERVAL_SECONDS,
     httpTimeoutMs: parsed.HTTP_TIMEOUT_MS,
     retryAttempts: parsed.RETRY_ATTEMPTS,
@@ -147,6 +199,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     deliveryCanaryEnabled,
     deliveryCanaryFixturePath: parsed.DELIVERY_CANARY_FIXTURE_PATH,
     deliveryCanaryKeyword: parsed.DELIVERY_CANARY_KEYWORD.trim().toLowerCase(),
+    marketWatchGroupName: watch?.name || parsed.MARKET_WATCH_GROUP_NAME,
+    marketWatchSendNoChanges: parsed.MARKET_WATCH_SEND_NO_CHANGES ?? watch?.noChange ?? false,
     healthMetricsEnabled: parsed.HEALTH_METRICS_ENABLED,
     healthMetricsHost: parsed.HEALTH_METRICS_HOST,
     healthMetricsPort: parsed.HEALTH_METRICS_PORT,
@@ -161,5 +215,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     openclawGatewayToken: parsed.OPENCLAW_GATEWAY_TOKEN,
     openclawToolUrl: parsed.OPENCLAW_TOOL_URL,
     dryRun: parsed.DRY_RUN ?? false,
+    browserWorkerUrl: parsed.BROWSER_WORKER_URL,
+    browserWorkerToken: parsed.BROWSER_WORKER_TOKEN,
+    browserWorkerAutostartEnabled: parsed.BROWSER_WORKER_AUTOSTART_ENABLED,
+    browserWorkerAutostartCommand: parsed.BROWSER_WORKER_AUTOSTART_COMMAND,
+    browserWorkerHealthTimeoutMs: parsed.BROWSER_WORKER_HEALTH_TIMEOUT_MS,
+    browserWorkerStartupTimeoutMs: parsed.BROWSER_WORKER_STARTUP_TIMEOUT_MS,
+    browserWorkerRestartCooldownMs: parsed.BROWSER_WORKER_RESTART_COOLDOWN_MS,
+    healthStatePath: parsed.HEALTH_STATE_PATH,
+    detailFetchEnabled: parsed.DETAIL_FETCH_ENABLED ?? false,
+    detailMaxPerCycle: parsed.DETAIL_MAX_PER_CYCLE,
+    detailDelayMs: parsed.DETAIL_DELAY_MS,
+    detailCachePath: parsed.DETAIL_CACHE_PATH,
+    degradedAlertAfterFailures: parsed.DEGRADED_ALERT_AFTER_FAILURES,
+    marketplaceAreaId: parsed.MARKETPLACE_AREA_ID,
+    marketplaceFacebookEnabled: parsed.MARKETPLACE_FACEBOOK_ENABLED ?? false,
   };
 }

@@ -38,6 +38,7 @@ function parseFromClientData(html: string): RawListing[] {
     if (!ads || ads.length === 0) return [];
 
     return ads.map((ad) => ({
+      source: "gumtree" as const,
       title: normalizeTitle(ad.title),
       url: toAbsoluteUrl(ad.path),
       price: ad.price,
@@ -66,7 +67,7 @@ function parseFromHtml(html: string): RawListing[] {
 
     const url = toAbsoluteUrl(href);
     if (!found.has(url)) {
-      found.set(url, { title, url });
+      found.set(url, { source: "gumtree", title, url });
     }
   });
 
@@ -79,11 +80,41 @@ export function parseGumtreeResults(html: string): RawListing[] {
   return parseFromHtml(html);
 }
 
-export async function fetchGumtreeHtml(postcode: string, keyword: string, timeoutMs: number): Promise<string> {
+/**
+ * A real search page is tens of kilobytes and carries the results payload; the
+ * WAF challenge is a few hundred bytes of loader script. Match on the WAF's own
+ * fingerprints, with a size floor as a backstop for variants we have not seen.
+ */
+export function isBotChallenge(html: string): boolean {
+  if (/window\.rbzns|kramericaindustries|px-captcha|are you a robot/i.test(html)) {
+    return true;
+  }
+  // The parser reads either the embedded clientData payload or the rendered
+  // results markup, so a page carrying neither and weighing almost nothing is
+  // not a search page at all.
+  const hasResultsMarkup = /window\.clientData|data-testid="search-results"|href="\/p\//.test(html);
+  return html.length < 2000 && !hasResultsMarkup;
+}
+
+/**
+ * `searchCategory` scopes the search. The default "for-sale" is general goods:
+ * a "camper van" search there returns Barbie playsets, awnings and T-shirts, no
+ * vehicles at all. Vehicle watches want "campervans-motorhomes" or
+ * "cars-vans-motorbikes".
+ */
+export async function fetchGumtreeHtml(
+  postcode: string,
+  keyword: string,
+  timeoutMs: number,
+  distanceKm = 20,
+  searchCategory = "for-sale"
+): Promise<string> {
+  const distanceMiles = Math.max(1, Math.round(distanceKm * 0.621371));
   const params = new URLSearchParams({
     search_location: postcode,
     q: keyword,
-    search_category: "for-sale"
+    search_category: searchCategory,
+    distance: String(distanceMiles)
   });
   const url = `https://www.gumtree.com/search?${params.toString()}`;
   const controller = new AbortController();
@@ -102,7 +133,20 @@ export async function fetchGumtreeHtml(postcode: string, keyword: string, timeou
       throw new Error(`Gumtree returned ${response.status} for ${url}`);
     }
 
-    return await response.text();
+    const html = await response.text();
+
+    // Gumtree fronts its search with a Reblaze WAF that answers suspected bots
+    // with a tiny JavaScript challenge page — served as HTTP 247, which is
+    // inside the 2xx range and therefore passes `response.ok`. The parser finds
+    // no listings in it and the cycle logs a cheerful `parsed=0, success`,
+    // making a hard block look exactly like "nothing for sale today".
+    if (isBotChallenge(html)) {
+      throw new Error(
+        `Gumtree served a bot challenge instead of results (status ${response.status}, ${html.length} bytes) — likely rate limited`
+      );
+    }
+
+    return html;
   } finally {
     clearTimeout(timer);
   }

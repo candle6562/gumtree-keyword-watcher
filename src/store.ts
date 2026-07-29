@@ -1,9 +1,29 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-interface SeenEntry {
+export interface SeenEntry {
   url: string;
   seenAt: number;
+  title?: string;
+  matchedKeyword?: string;
+  watchName?: string;
+  source?: string;
+  price?: string;
+  location?: string;
+  postedDate?: string;
+  /**
+   * Whether the alert for this listing actually reached WhatsApp.
+   *
+   * Listings are recorded as seen at match time so a transport outage cannot
+   * cause the same listing to be re-matched as "new" on every ten-minute cycle
+   * — that behaviour built a 355-message backlog and flooded the group chat on
+   * 2026-07-22. Delivery is then tracked separately so marking seen early does
+   * not silently drop anything: undelivered entries are retried on later cycles.
+   *
+   * Legacy entries predate this field and were only ever written after a
+   * successful send, so `undefined` means delivered.
+   */
+  delivered?: boolean;
 }
 
 interface SeenStoreOptions {
@@ -14,14 +34,11 @@ interface SeenStoreOptions {
 
 interface PersistedSeenStoreV2 {
   version: 2;
-  entries: Array<{
-    url: string;
-    seenAt: number;
-  }>;
+  entries: SeenEntry[];
 }
 
 export class SeenStore {
-  private readonly seenByUrl = new Map<string, number>();
+  private readonly seenByUrl = new Map<string, SeenEntry>();
   private readonly now: () => number;
 
   constructor(
@@ -54,17 +71,72 @@ export class SeenStore {
     return this.seenByUrl.has(url);
   }
 
+  entries(): SeenEntry[] {
+    return Array.from(this.seenByUrl.values());
+  }
+
+  get(url: string): SeenEntry | undefined {
+    return this.seenByUrl.get(url);
+  }
+
+  count(): number {
+    return this.seenByUrl.size;
+  }
+
+  countSince(sinceMs: number): number {
+    return Array.from(this.seenByUrl.values()).filter((entry) => entry.seenAt >= sinceMs).length;
+  }
+
   async add(url: string): Promise<void> {
-    this.seenByUrl.set(url, this.now());
+    await this.addEntry({ url });
+  }
+
+  async addEntry(entry: Omit<SeenEntry, "seenAt"> & { seenAt?: number }): Promise<void> {
+    this.seenByUrl.set(entry.url, { ...entry, seenAt: entry.seenAt ?? this.now() });
     this.applyRetention();
     await this.persist();
+  }
+
+  /**
+   * Record entries without persisting between each one — a batch of matches is
+   * a single logical write.
+   */
+  async addEntries(entries: Array<Omit<SeenEntry, "seenAt"> & { seenAt?: number }>): Promise<void> {
+    if (entries.length === 0) return;
+    for (const entry of entries) {
+      this.seenByUrl.set(entry.url, { ...entry, seenAt: entry.seenAt ?? this.now() });
+    }
+    this.applyRetention();
+    await this.persist();
+  }
+
+  /** Entries that were matched but whose alert never reached WhatsApp. */
+  pendingDelivery(watchName?: string): SeenEntry[] {
+    return Array.from(this.seenByUrl.values())
+      .filter((entry) => entry.delivered === false)
+      .filter((entry) => watchName === undefined || entry.watchName === watchName)
+      .sort((left, right) => left.seenAt - right.seenAt);
+  }
+
+  async markDelivered(urls: string[]): Promise<void> {
+    let changed = false;
+    for (const url of urls) {
+      const entry = this.seenByUrl.get(url);
+      if (entry && entry.delivered === false) {
+        entry.delivered = true;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.persist();
+    }
   }
 
   private loadParsedState(parsed: unknown): void {
     this.seenByUrl.clear();
     const entries = this.parseEntries(parsed);
     entries.forEach((entry) => {
-      this.seenByUrl.set(entry.url, entry.seenAt);
+      this.seenByUrl.set(entry.url, entry);
     });
   }
 
@@ -102,12 +174,12 @@ export class SeenStore {
   private applyRetention(): void {
     const retentionCutoffMs = this.now() - this.options.retentionDays * 24 * 60 * 60 * 1000;
     const retained = Array.from(this.seenByUrl.entries())
-      .filter(([, seenAt]) => seenAt >= retentionCutoffMs)
-      .sort((left, right) => left[1] - right[1]);
+      .filter(([, entry]) => entry.seenAt >= retentionCutoffMs)
+      .sort((left, right) => left[1].seenAt - right[1].seenAt);
 
     const bounded = retained.slice(Math.max(0, retained.length - this.options.maxEntries));
     this.seenByUrl.clear();
-    bounded.forEach(([url, seenAt]) => this.seenByUrl.set(url, seenAt));
+    bounded.forEach(([url, entry]) => this.seenByUrl.set(url, entry));
   }
 
   private async persist(): Promise<void> {
@@ -116,7 +188,7 @@ export class SeenStore {
     const payload = JSON.stringify(
       {
         version: 2,
-        entries: Array.from(this.seenByUrl.entries()).map(([url, seenAt]) => ({ url, seenAt }))
+        entries: Array.from(this.seenByUrl.values())
       } as PersistedSeenStoreV2,
       null,
       2

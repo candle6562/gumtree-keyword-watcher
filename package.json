@@ -6,13 +6,19 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "run:once": "tsx src/run-once.ts",
+    "watches": "tsx bin/watches.ts",
+    "report": "tsx bin/report.ts",
+    "search": "tsx bin/search.ts",
+    "daily-summary": "tsx bin/daily-summary.ts",
+    "history": "tsx bin/history.ts",
     "guard:routines": "bash scripts/routine-parent-guard.sh",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "start:once": "node dist/run-once.js",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
-    "verify": "bash scripts/verify.sh"
+    "verify": "bash scripts/verify.sh",
+    "detail": "tsx bin/detail.ts"
   },
   "dependencies": {
     "cheerio": "^1.1.2",

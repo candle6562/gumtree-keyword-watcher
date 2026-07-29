@@ -1,0 +1,28 @@
+{
+  "watches": [
+    {
+      "name": "Garmin Forerunner 255",
+      "enabled": true,
+      "frequency": "10m",
+      "noChange": false,
+      "distanceKm": 20,
+      "terms": [
+        "garmin forerunner 255"
+      ]
+    },
+    {
+      "name": "camper van",
+      "enabled": true,
+      "frequency": "10m",
+      "noChange": false,
+      "distanceKm": 20,
+      "minPrice": 1000,
+      "maxPrice": 10000,
+      "maxAgeDays": 1,
+      "gumtreeCategory": "campervans-motorhomes",
+      "terms": [
+        "camper van"
+      ]
+    }
+  ]
+}

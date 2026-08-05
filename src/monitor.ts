@@ -19,6 +19,15 @@ import { loadWatches, type MarketWatch } from "./watches.js";
 /** Cap on how many listings go into a single WhatsApp message. */
 const MAX_LISTINGS_PER_ALERT = 25;
 
+/**
+ * How deep each new-listing search reads.
+ *
+ * Applies to every cycle, including the first one after a term is added, so a
+ * new term introduces itself with at most this many alerts rather than the
+ * entire backlog Facebook happens to return.
+ */
+const NEW_LISTING_PAGE_SIZE = 20;
+
 function entryToListing(entry: SeenEntry): Listing {
   return {
     url: entry.url,
@@ -306,7 +315,11 @@ export class Monitor {
                     this.config,
                     keyword,
                     maxAgeDays,
-                    50,
+                    // Twenty is enough for a ten-minute cycle, which normally
+                    // turns up nought to three new listings, and it bounds what
+                    // a freshly added term can produce: without it the first
+                    // run on a new term alerts a whole page of backlog at once.
+                    NEW_LISTING_PAGE_SIZE,
                     watch.distanceKm,
                     { min: watch.minPrice, max: watch.maxPrice },
                     // Newest-first results mean the worker can stop scrolling

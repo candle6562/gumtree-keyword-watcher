@@ -39,7 +39,7 @@ const envSchema = z.object({
   DETAIL_DELAY_MS: z.coerce.number().int().nonnegative().default(1500),
   DETAIL_CACHE_PATH: z.string().trim().default(".data/listing-details.json"),
   OPENROUTER_API_KEY: z.string().trim().optional(),
-  OPENROUTER_TEXT_MODEL: z.string().trim().default("deepseek/deepseek-v4-flash"),
+  OPENROUTER_TEXT_MODEL: z.string().trim().default("deepseek/deepseek-v4-flash-0731"),
   // DeepSeek is text-only, so plate reading needs a separate vision model.
   OPENROUTER_VISION_MODEL: z.string().trim().default("google/gemini-2.5-flash-lite"),
   OPENROUTER_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),

@@ -22,7 +22,8 @@
       "gumtreeCategory": "campervans-motorhomes",
       "terms": [
         "camper van"
-      ]
+      ],
+      "kind": "vehicle"
     }
   ]
 }

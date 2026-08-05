@@ -25,7 +25,13 @@ export interface TriageResult {
     seats?: number;
     model?: string;
     popTop?: boolean;
+    /** Null, not false, when the advert simply does not say. */
+    aircon?: boolean | null;
+    /** Already a camper conversion, as opposed to an empty panel van. */
+    converted?: boolean | null;
   };
+  /** How the asking price compares to similar vehicles, 1-10. */
+  valueForMoney?: { score: number; reason: string };
   gatedLocally: boolean;
   usage?: Usage;
 }
@@ -34,7 +40,7 @@ export interface TriageResult {
  * Bump when the prompt changes: cached verdicts from an older prompt are
  * answers to a different question.
  */
-export const PROMPT_VERSION = "v2";
+export const PROMPT_VERSION = "v3";
 
 const SYSTEM_PROMPT = `You assess second-hand vehicle adverts against a buyer's written specification.
 
@@ -77,11 +83,68 @@ Reply with JSON only:
   "extracted": {
     "year": number | null, "mileage": number | null, "fuel": string | null,
     "euroStatus": string | null, "seats": number | null, "model": string | null,
-    "popTop": boolean | null
-  }
-}`;
+    "popTop": boolean | null, "aircon": boolean | null, "converted": boolean | null
+  },
+  "valueForMoney": { "score": number, "reason": string }
+}
 
-function buildUserPrompt(spec: Spec, listing: ListingDetail): string {
+Three fields need care.
+
+"aircon" and "converted" follow the silence rule above: true when the advert
+says so, false only when it positively says otherwise ("no air con", "empty
+panel van, ready to convert"), and null when it simply does not say — which is
+most of the time. Do not infer air conditioning from a vehicle being modern, or
+a conversion from the word "camper" in a title that is otherwise about a van
+shell.
+
+"converted" means the vehicle already has a camper interior — bed, units,
+somewhere to cook. A day van with seats and windows is not converted. A van
+described as "ideal for conversion" is explicitly not converted.
+
+"valueForMoney" is 1-10 on the asking price against comparable vehicles, using
+the market context below when it is given. 5 is the going rate. Above 5 means
+cheaper than comparable vehicles for what it is; below means dearer. Judge on
+price against age, mileage and whether the conversion work is already done —
+not on how well it matches the buyer's specification, which "score" already
+covers. Say which in one short clause: "20k under comparable T5 conversions" or
+"high mileage for the money". If there is nothing to compare against, give 5
+and say the comparison was not possible.`;
+
+/**
+ * What comparable vehicles are going for, drawn from listings we have already
+ * seen for the same watch.
+ *
+ * Without this the model can only judge value against whatever it recalls of
+ * the used market in general. The local picture is both current and specific to
+ * the search, which is what makes "cheap for what it is" mean anything.
+ */
+export interface MarketContext {
+  sampleSize: number;
+  medianPrice: number;
+  lowerQuartile: number;
+  upperQuartile: number;
+  /** A handful of concrete comparables, cheapest first. */
+  comparables: Array<{ title: string; price: number }>;
+}
+
+function renderMarketContext(market: MarketContext): string {
+  const lines = [
+    "# Market context (listings already seen for this same search)",
+    `Sample: ${market.sampleSize} vehicles`,
+    `Asking prices: lower quartile £${market.lowerQuartile.toLocaleString("en-GB")}, ` +
+      `median £${market.medianPrice.toLocaleString("en-GB")}, ` +
+      `upper quartile £${market.upperQuartile.toLocaleString("en-GB")}`
+  ];
+  if (market.comparables.length > 0) {
+    lines.push("Comparables:");
+    for (const c of market.comparables) {
+      lines.push(`  £${c.price.toLocaleString("en-GB")} — ${c.title}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function buildUserPrompt(spec: Spec, listing: ListingDetail, market?: MarketContext): string {
   const attributes = Object.entries(listing.attributes ?? {})
     .map(([key, value]) => `${key}: ${value}`)
     .join("\n");
@@ -102,7 +165,9 @@ function buildUserPrompt(spec: Spec, listing: ListingDetail): string {
     "",
     listing.description
       ? ""
-      : "Note: with no description, nearly every specification point is an unknown."
+      : "Note: with no description, nearly every specification point is an unknown.",
+    market ? "" : "",
+    market ? renderMarketContext(market) : ""
   ]
     .filter(Boolean)
     .join("\n");
@@ -111,7 +176,8 @@ function buildUserPrompt(spec: Spec, listing: ListingDetail): string {
 export async function triageListing(
   config: OpenRouterConfig,
   spec: Spec,
-  listing: ListingDetail
+  listing: ListingDetail,
+  market?: MarketContext
 ): Promise<TriageResult> {
   const base = {
     url: listing.url,
@@ -146,7 +212,7 @@ export async function triageListing(
     maxTokens: 8000,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: buildUserPrompt(spec, listing) }
+      { role: "user", content: buildUserPrompt(spec, listing, market) }
     ]
   });
 
@@ -162,8 +228,27 @@ export async function triageListing(
     unknowns: data.unknowns ?? [],
     registration: data.registration ?? undefined,
     extracted: data.extracted ?? {},
+    valueForMoney: normaliseValue(data.valueForMoney),
     gatedLocally: false,
     usage: result.usage
+  };
+}
+
+/**
+ * Keep the value rating inside 1-10, or drop it.
+ *
+ * A rating is only useful if the scale is trustworthy, so a missing or
+ * unparseable score becomes absent rather than a made-up middle value — the
+ * alert then shows nothing instead of asserting "5/10" the model never said.
+ */
+function normaliseValue(
+  raw: TriageResult["valueForMoney"]
+): TriageResult["valueForMoney"] | undefined {
+  const score = Number(raw?.score);
+  if (!Number.isFinite(score)) return undefined;
+  return {
+    score: Math.max(1, Math.min(10, Math.round(score))),
+    reason: typeof raw?.reason === "string" ? raw.reason.trim() : ""
   };
 }
 

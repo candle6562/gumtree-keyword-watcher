@@ -59,7 +59,54 @@ export type AlertListing = Listing & {
   description?: string;
   attributes?: Record<string, string>;
   sellerName?: string;
+  /** Present only for watches marked as a vehicle search. */
+  vehicle?: {
+    mileage?: number | null;
+    aircon?: boolean | null;
+    converted?: boolean | null;
+    valueForMoney?: { score: number; reason: string };
+  };
 };
+
+/**
+ * Mileage bands, worst-to-best thresholds in miles.
+ *
+ * A number alone means little at a glance on a phone; the marker is what makes
+ * a bad one obvious while scrolling.
+ */
+function mileageBand(miles: number): string {
+  if (miles < 50_000) return "🟢";
+  if (miles < 100_000) return "🟡";
+  if (miles < 150_000) return "🟠";
+  return "🔴";
+}
+
+/** Tri-state: the advert said yes, said no, or said nothing. */
+function triState(value: boolean | null | undefined): string {
+  if (value === true) return "✅";
+  if (value === false) return "❌";
+  return "❓";
+}
+
+function formatVehicle(vehicle: NonNullable<AlertListing["vehicle"]>): string[] {
+  const lines: string[] = [];
+  const bits: string[] = [];
+
+  if (typeof vehicle.mileage === "number") {
+    bits.push(`${mileageBand(vehicle.mileage)} ${vehicle.mileage.toLocaleString("en-GB")} mi`);
+  } else {
+    bits.push("❓ mileage");
+  }
+  bits.push(`${triState(vehicle.aircon)} aircon`);
+  bits.push(`${triState(vehicle.converted)} converted`);
+  lines.push(`🚐 ${bits.join(" · ")}`);
+
+  if (vehicle.valueForMoney) {
+    const { score, reason } = vehicle.valueForMoney;
+    lines.push(`💎 Value ${score}/10${reason ? ` — ${truncate(reason, 90)}` : ""}`);
+  }
+  return lines;
+}
 
 /** Attributes worth the space in a phone notification, in display order. */
 const ATTRIBUTE_PRIORITY = [
@@ -95,6 +142,7 @@ function formatListingForMessage(listing: AlertListing): string {
     listing.title,
     formatPrice(listing),
     `🧭 ${meta}`,
+    ...(listing.vehicle ? formatVehicle(listing.vehicle) : []),
     listing.attributes ? formatAttributes(listing.attributes) : null,
     description ? `📝 ${truncate(description, 220)}` : null,
     listing.sellerName ? `👤 ${listing.sellerName}` : null,

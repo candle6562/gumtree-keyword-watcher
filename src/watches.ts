@@ -13,6 +13,13 @@ export interface MarketWatch {
   maxAgeDays?: 1 | 7 | 30;
   /** Gumtree search category slug; default "for-sale" is general goods. */
   gumtreeCategory?: string;
+  /**
+   * What is being searched for. "vehicle" turns on the extra assessment —
+   * mileage, air conditioning, whether it is already converted, and a value
+   * rating — which is only meaningful for vehicles and costs a model call per
+   * listing, so it stays off unless asked for.
+   */
+  kind?: "vehicle";
   terms: string[];
 }
 
@@ -58,6 +65,7 @@ export function loadWatches(filePath: string = defaultWatchesFilePath()): Market
           /^[a-z0-9-]+$/.test((watch as Partial<MarketWatch>).gumtreeCategory as string)
             ? ((watch as Partial<MarketWatch>).gumtreeCategory as string)
             : undefined,
+        kind: (watch as Partial<MarketWatch>).kind === "vehicle" ? "vehicle" : undefined,
         terms: Array.isArray(watch.terms)
           ? Array.from(new Set(watch.terms.map((term) => String(term).trim().toLowerCase()).filter(Boolean)))
           : []

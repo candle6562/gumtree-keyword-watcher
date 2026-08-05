@@ -5,10 +5,11 @@ import { DiagnosticsSink } from "./diagnostics.js";
 import { searchFacebookMarketplace } from "./facebook-marketplace.js";
 import { HealthStateStore } from "./health-state.js";
 import { fetchGumtreeHtml, parseGumtreeResults } from "./gumtree.js";
-import { DetailStore, enrichListings } from "./listing-detail.js";
+import { DetailStore, enrichListings, type ListingDetail } from "./listing-detail.js";
 import { matchListings } from "./matcher.js";
 import { filterByWatchRules } from "./listing-filter.js";
 import { WhatsappNotifier, type AlertListing } from "./notifier.js";
+import { assessVehicles, buildMarketContext } from "./vehicle-assessment.js";
 import { RuntimeStats } from "./observability.js";
 import { withRetry } from "./retry.js";
 import { SeenStore, type SeenEntry } from "./store.js";
@@ -116,8 +117,10 @@ export class Monitor {
    * budget, non-Facebook, or simply failed — falls through as the plain
    * listing, so a detail problem can never cost us the alert itself.
    */
-  private async withDetail(listings: Listing[]): Promise<AlertListing[]> {
-    if (!this.config.detailFetchEnabled) return listings;
+  private async withDetail(
+    listings: Listing[]
+  ): Promise<{ listings: AlertListing[]; details: Map<string, ListingDetail> }> {
+    if (!this.config.detailFetchEnabled) return { listings, details: new Map() };
 
     let enriched;
     try {
@@ -125,7 +128,7 @@ export class Monitor {
       await this.details.persist();
     } catch (error) {
       console.error(`Detail enrichment failed, alerting without it: ${describeError(error)}`);
-      return listings;
+      return { listings, details: new Map() };
     }
 
     const byUrl = new Map(enriched.details.map((detail) => [detail.url, detail]));
@@ -133,7 +136,7 @@ export class Monitor {
       `Detail: ${enriched.fetched} fetched, ${enriched.cached} cached, ${enriched.skipped} skipped, ${enriched.failed} failed`
     );
 
-    return listings.map((listing) => {
+    const withDetail = listings.map((listing) => {
       const detail = byUrl.get(listing.url);
       if (!detail) return listing;
       return {
@@ -152,6 +155,38 @@ export class Monitor {
         sellerName: detail.sellerName
       };
     });
+
+    return { listings: withDetail, details: byUrl };
+  }
+
+  /**
+   * Add the vehicle assessment for watches that asked for it.
+   *
+   * Comparables come from listings already seen for this same watch, so "good
+   * value" is measured against the local market rather than the model's general
+   * recollection of used vans.
+   */
+  private async assessIfVehicle(
+    watch: MarketWatch,
+    listings: AlertListing[],
+    details: Map<string, ListingDetail>
+  ): Promise<AlertListing[]> {
+    if (watch.kind !== "vehicle") return listings;
+    const market = buildMarketContext(this.store.entries(), watch.name);
+    const { listings: assessed, outcome } = await assessVehicles(
+      this.config,
+      watch,
+      listings,
+      details,
+      market
+    );
+    if (outcome.assessed > 0 || outcome.failed > 0) {
+      console.log(
+        `Vehicle assessment: ${outcome.assessed} assessed, ${outcome.failed} failed` +
+          (market ? ` (compared against ${market.sampleSize} listings, median £${market.medianPrice})` : " (no comparables)")
+      );
+    }
+    return assessed;
   }
 
   async runCycle(): Promise<void> {
@@ -390,7 +425,8 @@ export class Monitor {
       const deferred = pending.length - batch.length;
 
       if (batch.length > 0) {
-        const listings = await this.withDetail(batch.map(entryToListing));
+        const enriched = await this.withDetail(batch.map(entryToListing));
+        const listings = await this.assessIfVehicle(watch, enriched.listings, enriched.details);
         try {
           await withRetry(
             () => this.notifier.sendListingAlertBatch(this.watchDisplayName(watch), listings),

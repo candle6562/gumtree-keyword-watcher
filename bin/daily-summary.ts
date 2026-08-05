@@ -9,7 +9,7 @@ import { WhatsappNotifier } from "../src/notifier.js";
 import { buildShortlist, formatShortlist } from "../src/shortlist.js";
 import { SeenStore } from "../src/store.js";
 import type { Listing } from "../src/types.js";
-import { loadWatches } from "../src/watches.js";
+import { loadWatches, primaryTerm } from "../src/watches.js";
 
 function postedAgeDays(postedDate?: string): number | null {
   if (!postedDate) return null;
@@ -98,9 +98,14 @@ async function main(): Promise<void> {
   for (const watch of watches) {
     const byUrl = new Map<string, Listing>();
     const stats = emptyStats();
+    // Gumtree is fetched once per watch, on the primary term only: a page fetch
+    // per term is what drew a bot challenge on the ten-minute watcher.
+    const gumtreeTerm = primaryTerm(watch);
     for (const term of watch.terms) {
       try {
-        for (const item of await searchGumtree24h(config, term, watch.distanceKm, stats)) byUrl.set(item.url, item);
+        if (term === gumtreeTerm) {
+          for (const item of await searchGumtree24h(config, term, watch.distanceKm, stats)) byUrl.set(item.url, item);
+        }
         if (config.marketplaceFacebookEnabled) {
           const fbItems = await searchFacebookMarketplace(config, term, 1, 20, watch.distanceKm);
           stats.facebookReturned += fbItems.length;

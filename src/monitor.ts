@@ -14,7 +14,7 @@ import { RuntimeStats } from "./observability.js";
 import { withRetry } from "./retry.js";
 import { SeenStore, type SeenEntry } from "./store.js";
 import type { Listing, ListingSource, RawListing } from "./types.js";
-import { loadWatches, type MarketWatch } from "./watches.js";
+import { loadWatches, primaryTerm, type MarketWatch } from "./watches.js";
 
 /** Cap on how many listings go into a single WhatsApp message. */
 const MAX_LISTINGS_PER_ALERT = 25;
@@ -55,6 +55,9 @@ function postedAgeDays(postedDate?: string | null): number | null {
   if (/^(mo|month|months)$/.test(unit)) return amount * 30;
   return null;
 }
+
+/** Thrown to skip a source for this keyword; never a failure. */
+class SkipSource extends Error {}
 
 function describeError(error: unknown): string {
   if (error instanceof Error) {
@@ -271,6 +274,8 @@ export class Monitor {
       let totalMatched = 0;
       let newThisWatch = 0;
 
+      const gumtreeTerm = primaryTerm(watch);
+
       for (const [keywordIndex, keyword] of watch.terms.entries()) {
         // Space the keywords out. Five terms fired back to back is five Gumtree
         // requests in a second, repeated every ten minutes, which is what drew
@@ -293,6 +298,8 @@ export class Monitor {
         const maxAgeDays = watch.maxAgeDays ?? 1;
 
         try {
+          // Gumtree gets the primary term only; the rest are Facebook-only.
+          if (keyword !== gumtreeTerm) throw new SkipSource();
           const html = await withRetry(
             () => fetchGumtreeHtml(this.config.postcode, keyword, this.config.httpTimeoutMs, watch.distanceKm, watch.gumtreeCategory),
             this.config.retryAttempts,
@@ -319,7 +326,9 @@ export class Monitor {
             ? recentLocalParsed.map((item) => ({ ...item, matchedKeyword: keyword }))
             : matchListings(recentLocalParsed, keyword);
         } catch (error) {
-          gumtreeError = describeError(error);
+          // A deliberately skipped source is not a failure and must not count
+          // toward the degraded-watcher alert.
+          if (!(error instanceof SkipSource)) gumtreeError = describeError(error);
         }
 
         if (this.config.marketplaceFacebookEnabled) {

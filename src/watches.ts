@@ -40,6 +40,23 @@ function defaultWatchesFilePath(): string {
   return process.env.MARKET_WATCHES_FILE || WATCHES_FILE_PATH;
 }
 
+/**
+ * The one term Gumtree is searched with.
+ *
+ * Facebook takes every term cheaply, but each Gumtree term is its own page
+ * fetch: five terms took the watch from 144 requests a day to 720 and drew a
+ * bot challenge. Gumtree's own search is broad enough that "camper van" already
+ * returns the Transits and Transporters the extra terms were added to catch, so
+ * the narrower terms earn their keep on Facebook and not here.
+ *
+ * The watch name is the primary term by convention; if no term matches it, the
+ * first is used.
+ */
+export function primaryTerm(watch: Pick<MarketWatch, "name" | "terms">): string | undefined {
+  const name = watch.name.trim().toLowerCase();
+  return watch.terms.find((term) => term.trim().toLowerCase() === name) ?? watch.terms[0];
+}
+
 export function normalizeName(name: string): string {
   return name.trim().replace(/\s+/g, " ");
 }

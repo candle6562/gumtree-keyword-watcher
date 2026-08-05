@@ -66,6 +66,8 @@ export type AlertListing = Listing & {
   vehicle?: {
     mileage?: number | null;
     mileageRating?: MileageRating | null;
+    /** Estimated real-world combined MPG; the model's knowledge, not the advert's. */
+    mpg?: number | null;
     aircon?: boolean | null;
     converted?: boolean | null;
     valueForMoney?: { score: number; reason: string };
@@ -105,6 +107,9 @@ function formatVehicle(vehicle: NonNullable<AlertListing["vehicle"]>): string[] 
   } else {
     bits.push("❓ mileage");
   }
+  // Marked "~" because no advert states economy: this is an estimate for the
+  // model, not a figure anyone has measured on this particular van.
+  if (typeof vehicle.mpg === "number") bits.push(`⛽ ~${Math.round(vehicle.mpg)} mpg`);
   bits.push(`${triState(vehicle.aircon)} aircon`);
   bits.push(`${triState(vehicle.converted)} converted`);
   lines.push(`🚐 ${bits.join(" · ")}`);

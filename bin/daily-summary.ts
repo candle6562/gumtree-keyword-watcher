@@ -6,6 +6,7 @@ import { fetchGumtreeHtml, parseGumtreeResults } from "../src/gumtree.js";
 import { filterByWatchRules } from "../src/listing-filter.js";
 import { matchListings } from "../src/matcher.js";
 import { WhatsappNotifier } from "../src/notifier.js";
+import { buildShortlist, formatShortlist } from "../src/shortlist.js";
 import { SeenStore } from "../src/store.js";
 import type { Listing } from "../src/types.js";
 import { loadWatches } from "../src/watches.js";
@@ -130,6 +131,18 @@ async function main(): Promise<void> {
     lines.push(`Cache for watch: total ${watchCacheEntries.length}, added last 24h ${watchCacheAdded24h}`);
     lines.push(`Cache for chat: total ${store.count()}, added last 24h ${store.countSince(sinceMs)}`);
     lines.push("");
+
+    // Vehicle watches get a ranked shortlist. The assessments were made when
+    // each listing was alerted, so this reorders what we already know rather
+    // than paying for a fresh judgement on every live listing each morning.
+    if (watch.type === "vehicle") {
+      const shortlist = buildShortlist(store.entries(), watch.name);
+      if (shortlist.length === 0) {
+        lines.push("🎯 No assessed vehicles to shortlist yet.", "");
+      } else {
+        lines.push(...formatShortlist(shortlist, watch.name), "");
+      }
+    }
   }
 
   await notifier.sendText(lines.join("\n").trim());

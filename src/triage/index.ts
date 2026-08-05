@@ -29,6 +29,14 @@ export interface TriageResult {
     aircon?: boolean | null;
     /** Already a camper conversion, as opposed to an empty panel van. */
     converted?: boolean | null;
+    /**
+     * Typical real-world combined MPG for this model and engine.
+     *
+     * Adverts effectively never state economy, so unlike every other field here
+     * this is the model's own knowledge of the vehicle rather than something
+     * read off the page. Treated as an estimate throughout and shown as one.
+     */
+    mpg?: number | null;
   };
   /** How the asking price compares to similar vehicles, 1-10. */
   valueForMoney?: { score: number; reason: string };
@@ -40,7 +48,7 @@ export interface TriageResult {
  * Bump when the prompt changes: cached verdicts from an older prompt are
  * answers to a different question.
  */
-export const PROMPT_VERSION = "v3";
+export const PROMPT_VERSION = "v4";
 
 const SYSTEM_PROMPT = `You assess second-hand vehicle adverts against a buyer's written specification.
 
@@ -83,12 +91,13 @@ Reply with JSON only:
   "extracted": {
     "year": number | null, "mileage": number | null, "fuel": string | null,
     "euroStatus": string | null, "seats": number | null, "model": string | null,
-    "popTop": boolean | null, "aircon": boolean | null, "converted": boolean | null
+    "popTop": boolean | null, "aircon": boolean | null, "converted": boolean | null,
+    "mpg": number | null
   },
   "valueForMoney": { "score": number, "reason": string }
 }
 
-Three fields need care.
+Four fields need care.
 
 "aircon" and "converted" follow the silence rule above: true when the advert
 says so, false only when it positively says otherwise ("no air con", "empty
@@ -100,6 +109,13 @@ shell.
 "converted" means the vehicle already has a camper interior — bed, units,
 somewhere to cook. A day van with seats and windows is not converted. A van
 described as "ideal for conversion" is explicitly not converted.
+
+"mpg" is the exception to the silence rule. Adverts do not state fuel economy,
+so estimate typical real-world combined MPG from the model, engine size and
+year — what an owner actually sees, not the manufacturer's figure. A 2.0 diesel
+Transit Custom is around 38; a 2.5 petrol T4 is around 22. Give null only when
+the advert does not identify the vehicle well enough to place it, and never
+guess from the price.
 
 "valueForMoney" is 1-10 on the asking price against comparable vehicles, using
 the market context below when it is given. 5 is the going rate. Above 5 means

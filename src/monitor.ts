@@ -189,6 +189,18 @@ export class Monitor {
       details,
       market
     );
+    // Persist what the model concluded, so the daily digest can rank these
+    // listings later without paying for a second assessment.
+    if (outcome.persist.size > 0) {
+      const updated = Array.from(outcome.persist.entries())
+        .map(([url, vehicle]) => {
+          const entry = this.store.get(url);
+          return entry ? { ...entry, vehicle } : null;
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      await this.store.update(updated);
+    }
+
     if (outcome.assessed > 0 || outcome.failed > 0) {
       console.log(
         `Vehicle assessment: ${outcome.assessed} assessed, ${outcome.failed} failed` +

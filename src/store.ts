@@ -39,6 +39,20 @@ export interface SeenEntry {
   missedSweeps?: number;
   /** Set once it has been missing long enough to call it gone. */
   goneAt?: number;
+  /**
+   * Vehicle assessment, kept so the daily digest can rank listings without
+   * paying for the model again. Written once, when the listing is alerted.
+   */
+  vehicle?: {
+    mileage?: number | null;
+    mpg?: number | null;
+    aircon?: boolean | null;
+    converted?: boolean | null;
+    /** Spec match, 0-100. */
+    score?: number;
+    verdict?: "shortlist" | "maybe" | "reject";
+    valueForMoney?: { score: number; reason: string };
+  };
 }
 
 /** What one sweep of a watch saw, kept so the next can judge its own health. */

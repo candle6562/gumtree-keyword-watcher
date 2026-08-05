@@ -90,6 +90,8 @@ export function buildMarketContext(entries: SeenEntry[], watchName: string): Mar
 export interface AssessmentOutcome {
   assessed: number;
   failed: number;
+  /** Assessments to persist, keyed by listing url. */
+  persist: Map<string, NonNullable<import("./store.js").SeenEntry["vehicle"]>>;
 }
 
 /**
@@ -106,7 +108,7 @@ export async function assessVehicles(
   details: Map<string, ListingDetail>,
   market: MarketContext | undefined
 ): Promise<{ listings: AlertListing[]; outcome: AssessmentOutcome }> {
-  const outcome: AssessmentOutcome = { assessed: 0, failed: 0 };
+  const outcome: AssessmentOutcome = { assessed: 0, failed: 0, persist: new Map() };
   if (watch.type !== "vehicle" || !config.openrouterApiKey) return { listings, outcome };
 
   let spec;
@@ -136,11 +138,21 @@ export async function assessVehicles(
         );
         outcome.assessed += 1;
         const miles = declaredMileage(detail.attributes) ?? result.extracted.mileage ?? null;
+        outcome.persist.set(listing.url, {
+          mileage: miles,
+          mpg: result.extracted.mpg ?? null,
+          aircon: result.extracted.aircon ?? null,
+          converted: result.extracted.converted ?? null,
+          score: result.score,
+          verdict: result.verdict,
+          valueForMoney: result.valueForMoney
+        });
         return {
           ...listing,
           vehicle: {
             mileage: miles,
             mileageRating: miles === null ? null : rateMileage(miles, spec.softFlags.mileage_ideal),
+            mpg: result.extracted.mpg ?? null,
             aircon: result.extracted.aircon ?? null,
             converted: result.extracted.converted ?? null,
             valueForMoney: result.valueForMoney

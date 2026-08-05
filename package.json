@@ -20,7 +20,8 @@
     "verify": "bash scripts/verify.sh",
     "detail": "tsx bin/detail.ts",
     "triage": "tsx bin/triage.ts",
-    "triage:run": "tsx bin/triage-run.ts"
+    "triage:run": "tsx bin/triage-run.ts",
+    "price-watch": "tsx bin/price-watch.ts"
   },
   "dependencies": {
     "cheerio": "^1.1.2",

@@ -55,6 +55,9 @@ function sourceLabel(listing: Listing): string {
  * optional: a listing whose page could not be fetched still has to reach the
  * alert, just without the extra lines.
  */
+/** How a mileage reads against the buyer's ideal range for that search. */
+export type MileageRating = "great" | "good" | "ok" | "bad";
+
 export type AlertListing = Listing & {
   description?: string;
   attributes?: Record<string, string>;
@@ -62,6 +65,7 @@ export type AlertListing = Listing & {
   /** Present only for watches marked as a vehicle search. */
   vehicle?: {
     mileage?: number | null;
+    mileageRating?: MileageRating | null;
     aircon?: boolean | null;
     converted?: boolean | null;
     valueForMoney?: { score: number; reason: string };
@@ -69,16 +73,19 @@ export type AlertListing = Listing & {
 };
 
 /**
- * Mileage bands, worst-to-best thresholds in miles.
+ * Marker for a mileage rating decided against the watch's own specification.
  *
- * A number alone means little at a glance on a phone; the marker is what makes
- * a bad one obvious while scrolling.
+ * The rating is computed where the spec is available rather than from fixed
+ * thresholds here: the spec calls 70k-120k ideal for this search, so a blanket
+ * "amber over 50k" would have flagged the buyer's preferred range as a caution.
  */
-function mileageBand(miles: number): string {
-  if (miles < 50_000) return "🟢";
-  if (miles < 100_000) return "🟡";
-  if (miles < 150_000) return "🟠";
-  return "🔴";
+function mileageMarker(rating: MileageRating): string {
+  switch (rating) {
+    case "great": return "🟢";
+    case "good": return "🟡";
+    case "ok": return "🟠";
+    case "bad": return "🔴";
+  }
 }
 
 /** Tri-state: the advert said yes, said no, or said nothing. */
@@ -93,7 +100,8 @@ function formatVehicle(vehicle: NonNullable<AlertListing["vehicle"]>): string[] 
   const bits: string[] = [];
 
   if (typeof vehicle.mileage === "number") {
-    bits.push(`${mileageBand(vehicle.mileage)} ${vehicle.mileage.toLocaleString("en-GB")} mi`);
+    const marker = vehicle.mileageRating ? `${mileageMarker(vehicle.mileageRating)} ` : "";
+    bits.push(`${marker}${vehicle.mileage.toLocaleString("en-GB")} mi`);
   } else {
     bits.push("❓ mileage");
   }
@@ -123,8 +131,13 @@ const ATTRIBUTE_PRIORITY = [
   "condition"
 ];
 
-function formatAttributes(attributes: Record<string, string>): string | null {
-  const entries = Object.entries(attributes).filter(([, v]) => v && v.trim().length > 0);
+function formatAttributes(attributes: Record<string, string>, skipMileage = false): string | null {
+  const entries = Object.entries(attributes)
+    .filter(([, v]) => v && v.trim().length > 0)
+    // The vehicle line already leads with mileage, banded against the spec.
+    // Repeating it here, twice over including the raw "Driven ... km", spends
+    // the most valuable line in the alert on something already said.
+    .filter(([k]) => !(skipMileage && /^mileage/i.test(k.trim())));
   if (entries.length === 0) return null;
 
   const rank = (key: string): number => {
@@ -135,29 +148,40 @@ function formatAttributes(attributes: Record<string, string>): string | null {
   return `📋 ${chosen.map(([k, v]) => `${k}: ${truncate(v.trim(), 40)}`).join(" · ")}`;
 }
 
-function formatListingForMessage(listing: AlertListing): string {
+/**
+ * One listing, as it appears in an alert.
+ *
+ * Vehicle watches get a tighter layout: the link moves up beside the title, and
+ * the seller name and eBay lookup are dropped. Neither helps when judging a
+ * van — an eBay search for "2017 Peugeot" returns nothing comparable — and the
+ * assessment lines below are what the reader is actually there for.
+ */
+function formatListingForMessage(listing: AlertListing, vehicleWatch = false): string {
   const meta = [sourceLabel(listing), listing.postedDate || "age unknown", listing.location].filter(Boolean).join(" · ");
   const description = listing.description?.replace(/\s+/g, " ").trim();
+
   const parts = [
-    listing.title,
+    vehicleWatch ? `${listing.title} (${listing.url})` : listing.title,
     formatPrice(listing),
     `🧭 ${meta}`,
     ...(listing.vehicle ? formatVehicle(listing.vehicle) : []),
-    listing.attributes ? formatAttributes(listing.attributes) : null,
+    listing.attributes ? formatAttributes(listing.attributes, vehicleWatch) : null,
     description ? `📝 ${truncate(description, 220)}` : null,
-    listing.sellerName ? `👤 ${listing.sellerName}` : null,
-    `🔗 ${listing.url}`,
-    `🛒 eBay: ${checkUrl(listing.title)}`
+    vehicleWatch ? null : listing.sellerName ? `👤 ${listing.sellerName}` : null,
+    vehicleWatch ? null : `🔗 ${listing.url}`,
+    vehicleWatch ? null : `🛒 eBay: ${checkUrl(listing.title)}`
   ].filter(Boolean);
   return parts.join("\n");
 }
 
-function formatBatchMessage(keyword: string, listings: AlertListing[]): string {
+function formatBatchMessage(keyword: string, listings: AlertListing[], vehicleWatch = false): string {
   const gumtreeCount = listings.filter((item) => item.source !== "facebook").length;
   const facebookCount = listings.filter((item) => item.source === "facebook").length;
   const schedule = process.env.MARKET_WATCH_SCHEDULE || "*/10 * * * * (every 10 mins)";
   const header = `🔔 Market update: ${keyword} — cron ${schedule} — ${listings.length} new listing${listings.length !== 1 ? "s" : ""} (${gumtreeCount} Gumtree, ${facebookCount} Facebook)\n`;
-  const items = listings.map((l, i) => `${i + 1}. ${formatListingForMessage(l)}`).join("\n\n────────\n\n");
+  const items = listings
+    .map((l, i) => `${i + 1}. ${formatListingForMessage(l, vehicleWatch)}`)
+    .join("\n\n────────\n\n");
   return header + "\n" + items;
 }
 
@@ -333,9 +357,13 @@ export class WhatsappNotifier {
     });
   }
 
-  async sendListingAlertBatch(keyword: string, listings: AlertListing[]): Promise<void> {
+  async sendListingAlertBatch(
+    keyword: string,
+    listings: AlertListing[],
+    options: { vehicleWatch?: boolean } = {}
+  ): Promise<void> {
     if (listings.length === 0) return;
-    const body = formatBatchMessage(keyword, listings);
+    const body = formatBatchMessage(keyword, listings, options.vehicleWatch);
 
     if (this.dryRun) {
       console.log(`[DRY_RUN] Batch WhatsApp alert to ${this.to} (${listings.length} items)\n${body}`);

@@ -1,6 +1,6 @@
 import type { AppConfig } from "./config.js";
 import type { ListingDetail } from "./listing-detail.js";
-import type { AlertListing } from "./notifier.js";
+import type { AlertListing, MileageRating } from "./notifier.js";
 import type { SeenEntry } from "./store.js";
 import { triageListing, type MarketContext } from "./triage/index.js";
 import { loadSpec, parsePricePounds } from "./triage/spec.js";
@@ -14,6 +14,40 @@ import type { MarketWatch } from "./watches.js";
  * Gated on `watch.kind === "vehicle"` because it costs a model call per listing
  * and means nothing for a search like a Garmin watch.
  */
+
+/**
+ * Mileage as the seller declared it, from Facebook's own vehicle fields.
+ *
+ * Facebook states this in kilometres and the worker converts it, so it is a
+ * fact rather than an inference. Always prefer it over the model reading a
+ * number out of the description: the same advert produced 204,000 from prose
+ * where the declared figure was quite different, and a wrong mileage is worse
+ * than none.
+ */
+function declaredMileage(attributes?: Record<string, string>): number | null {
+  const raw = attributes?.Mileage;
+  if (!raw) return null;
+  const match = raw.replace(/,/g, "").match(/(\d+)/);
+  if (!match) return null;
+  const miles = Number(match[1]);
+  return Number.isFinite(miles) && miles > 0 ? miles : null;
+}
+
+/**
+ * Rate a mileage against the range the specification calls ideal.
+ *
+ * Anchored on the spec rather than fixed thresholds so the marker always agrees
+ * with what the buyer actually wrote. This search calls 70k-120k ideal, so a
+ * van at 100k is not a warning; a blanket "amber over 50k" would have flagged
+ * most of the preferred range.
+ */
+export function rateMileage(miles: number, ideal?: [number, number]): MileageRating {
+  const [, idealMax] = ideal ?? [70_000, 120_000];
+  if (miles <= idealMax) return "great";
+  if (miles <= idealMax * 1.25) return "good";
+  if (miles <= idealMax * 1.6) return "ok";
+  return "bad";
+}
 
 /** Slug a watch name into the spec filename triage expects. */
 function specNameFor(watch: MarketWatch): string {
@@ -101,10 +135,12 @@ export async function assessVehicles(
           market
         );
         outcome.assessed += 1;
+        const miles = declaredMileage(detail.attributes) ?? result.extracted.mileage ?? null;
         return {
           ...listing,
           vehicle: {
-            mileage: result.extracted.mileage ?? null,
+            mileage: miles,
+            mileageRating: miles === null ? null : rateMileage(miles, spec.softFlags.mileage_ideal),
             aircon: result.extracted.aircon ?? null,
             converted: result.extracted.converted ?? null,
             valueForMoney: result.valueForMoney

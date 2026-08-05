@@ -429,7 +429,10 @@ export class Monitor {
         const listings = await this.assessIfVehicle(watch, enriched.listings, enriched.details);
         try {
           await withRetry(
-            () => this.notifier.sendListingAlertBatch(this.watchDisplayName(watch), listings),
+            () =>
+              this.notifier.sendListingAlertBatch(this.watchDisplayName(watch), listings, {
+                vehicleWatch: watch.kind === "vehicle"
+              }),
             this.config.retryAttempts,
             this.config.retryDelayMs,
             `notify:${watch.name}`

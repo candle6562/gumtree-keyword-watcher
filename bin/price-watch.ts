@@ -2,12 +2,7 @@
 import "dotenv/config";
 import { loadConfig } from "../src/config.js";
 import { WhatsappNotifier } from "../src/notifier.js";
-import {
-  PriceStore,
-  applySweep,
-  sweepMarket,
-  formatPriceReport
-} from "../src/price-watch.js";
+import { applySweep, sweepMarket, formatPriceReport } from "../src/price-watch.js";
 import { SeenStore } from "../src/store.js";
 import type { Listing } from "../src/types.js";
 import { loadWatches } from "../src/watches.js";
@@ -20,17 +15,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  // One store holds both what has been alerted and every price seen for it.
   const seen = new SeenStore(config.dataPath, {
     retentionDays: config.dedupeRetentionDays,
     maxEntries: config.dedupeMaxEntries
   });
   await seen.load();
-
-  const prices = new PriceStore(
-    process.env.PRICE_HISTORY_PATH || ".data/price-history.json",
-    Number(process.env.PRICE_HISTORY_RETENTION_DAYS || 180)
-  );
-  await prices.load();
 
   // The sweep stays inside the watch's own price bracket. Looking wider would
   // catch a listing falling into range from above, but it multiplies the work:
@@ -73,8 +63,8 @@ async function main(): Promise<void> {
       { maxResults, harvestTimeoutMs }
     );
 
-    const result = applySweep(prices, enumeration, tracked, watch.name);
-    await prices.persist();
+    const result = applySweep(seen, enumeration, tracked, watch.name);
+    await seen.update(result.pending);
     reports.push(formatPriceReport(result, watch.name));
   }
 

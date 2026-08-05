@@ -67,8 +67,13 @@ const envSchema = z.object({
   RETRY_ATTEMPTS: z.coerce.number().int().positive().default(3),
   RETRY_DELAY_MS: z.coerce.number().int().positive().default(1000),
   DATA_PATH: z.string().trim().default(".data/seen-listings.json"),
-  DEDUPE_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
-  DEDUPE_MAX_ENTRIES: z.coerce.number().int().positive().default(5000),
+  // Six months, not the thirty days a pure dedupe cache needed. The store now
+  // also holds price history, and a drop is measured against what a listing
+  // asked when we first saw it — evicting that would lose the comparison.
+  DEDUPE_RETENTION_DAYS: z.coerce.number().int().positive().default(180),
+  // Every sweep records the whole in-range market, not just what was alerted,
+  // so the ceiling has to clear the size of that market with room to spare.
+  DEDUPE_MAX_ENTRIES: z.coerce.number().int().positive().default(20000),
   DIAGNOSTICS_LOG_PATH: z.string().trim().default(".data/diagnostics.log"),
   DELIVERY_CANARY_ENABLED: z
     .string()

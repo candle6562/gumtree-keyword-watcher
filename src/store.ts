@@ -24,6 +24,27 @@ export interface SeenEntry {
    * successful send, so `undefined` means delivered.
    */
   delivered?: boolean;
+  /**
+   * Every asking price we have observed, oldest first.
+   *
+   * Lives here rather than in a store of its own. Keeping it separate meant two
+   * records for one listing that drifted apart: `price` freezes at first sight
+   * while the sweep tracked the real one, and 23 listings ended up holding two
+   * different "current" prices — with alerts reading the stale one.
+   */
+  priceHistory?: Array<{ price: number; at: number }>;
+  /** Last time a sweep actually saw this listing. */
+  lastSeenAt?: number;
+  /** Consecutive authoritative sweeps in which it did not appear. */
+  missedSweeps?: number;
+  /** Set once it has been missing long enough to call it gone. */
+  goneAt?: number;
+}
+
+/** What one sweep of a watch saw, kept so the next can judge its own health. */
+export interface SweepStat {
+  at: number;
+  seen: number;
 }
 
 interface SeenStoreOptions {
@@ -35,10 +56,12 @@ interface SeenStoreOptions {
 interface PersistedSeenStoreV2 {
   version: 2;
   entries: SeenEntry[];
+  sweeps?: Record<string, SweepStat>;
 }
 
 export class SeenStore {
   private readonly seenByUrl = new Map<string, SeenEntry>();
+  private sweeps = new Map<string, SweepStat>();
   private readonly now: () => number;
 
   constructor(
@@ -69,6 +92,28 @@ export class SeenStore {
 
   has(url: string): boolean {
     return this.seenByUrl.has(url);
+  }
+
+  lastSweep(watchName: string): SweepStat | undefined {
+    return this.sweeps.get(watchName);
+  }
+
+  recordSweep(watchName: string, seen: number): void {
+    this.sweeps.set(watchName, { at: this.now(), seen });
+  }
+
+  /**
+   * Update entries in place without touching `seenAt`.
+   *
+   * A sweep re-observing a listing is not the same event as first matching it:
+   * `seenAt` is what retention and "is this new" are keyed on, so a sweep must
+   * never look like a fresh sighting.
+   */
+  async update(entries: SeenEntry[]): Promise<void> {
+    if (entries.length === 0) return;
+    for (const entry of entries) this.seenByUrl.set(entry.url, entry);
+    this.applyRetention();
+    await this.persist();
   }
 
   entries(): SeenEntry[] {
@@ -134,10 +179,17 @@ export class SeenStore {
 
   private loadParsedState(parsed: unknown): void {
     this.seenByUrl.clear();
+    this.sweeps.clear();
     const entries = this.parseEntries(parsed);
     entries.forEach((entry) => {
       this.seenByUrl.set(entry.url, entry);
     });
+    const sweeps = (parsed as Partial<PersistedSeenStoreV2>)?.sweeps;
+    if (sweeps && typeof sweeps === "object") {
+      for (const [watch, stat] of Object.entries(sweeps)) {
+        if (stat && Number.isFinite(stat.seen)) this.sweeps.set(watch, stat);
+      }
+    }
   }
 
   private parseEntries(parsed: unknown): SeenEntry[] {
@@ -174,7 +226,10 @@ export class SeenStore {
   private applyRetention(): void {
     const retentionCutoffMs = this.now() - this.options.retentionDays * 24 * 60 * 60 * 1000;
     const retained = Array.from(this.seenByUrl.entries())
-      .filter(([, entry]) => entry.seenAt >= retentionCutoffMs)
+      // Retention runs on the most recent contact of any kind. A listing the
+      // sweep still sees every few hours is live, however long ago it was first
+      // matched, and dropping it would lose its whole price history.
+      .filter(([, entry]) => Math.max(entry.seenAt, entry.lastSeenAt ?? 0) >= retentionCutoffMs)
       .sort((left, right) => left[1].seenAt - right[1].seenAt);
 
     const bounded = retained.slice(Math.max(0, retained.length - this.options.maxEntries));
@@ -188,7 +243,8 @@ export class SeenStore {
     const payload = JSON.stringify(
       {
         version: 2,
-        entries: Array.from(this.seenByUrl.values())
+        entries: Array.from(this.seenByUrl.values()),
+        sweeps: Object.fromEntries(this.sweeps)
       } as PersistedSeenStoreV2,
       null,
       2

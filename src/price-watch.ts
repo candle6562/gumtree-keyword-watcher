@@ -2,53 +2,17 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AppConfig } from "./config.js";
 import { searchFacebookMarketplaceDetailed } from "./facebook-marketplace.js";
+import { type SeenEntry, type SeenStore } from "./store.js";
 import type { Listing } from "./types.js";
 
 /**
- * Price tracking for listings we have already matched.
+ * Price sweeping over the seen-store.
  *
- * Deliberately separate from SeenStore. That store answers "have we alerted
- * this yet" and prunes on a retention window; price history has to outlive
- * that, because the interesting drops are on listings that sat unsold for
- * weeks.
+ * Price history used to live in a store of its own. That produced two records
+ * for one listing which drifted apart — `price` frozen at first sight, the
+ * sweep tracking the real one — and left 1,258 listings stranded in a store the
+ * sweep no longer covered. One record per listing removes both problems.
  */
-export interface PriceObservation {
-  price: number;
-  at: number;
-}
-
-export interface PriceRecord {
-  url: string;
-  title?: string;
-  location?: string;
-  /**
-   * Which watch this listing belongs to.
-   *
-   * Load-bearing for absence detection: one store holds every watch's
-   * listings, and a sweep only ever enumerates one watch's search term. Without
-   * this scope a camper van sweep sees no Garmin watches and concludes all 46
-   * of them sold.
-   */
-  watchName?: string;
-  history: PriceObservation[];
-  lastSeenAt: number;
-  /** Consecutive complete sweeps in which this listing did not appear. */
-  missedSweeps: number;
-  /** Set once it has been missing long enough to call it gone. */
-  goneAt?: number;
-}
-
-/** What one sweep of a watch saw, kept so the next can judge its own health. */
-export interface SweepStat {
-  at: number;
-  seen: number;
-}
-
-interface PersistedPrices {
-  version: 1;
-  items: Record<string, PriceRecord>;
-  sweeps?: Record<string, SweepStat>;
-}
 
 /** Strip Facebook's tracking query string so the same listing keys consistently. */
 export function canonicalUrl(url: string): string {
@@ -71,95 +35,6 @@ export function parsePrice(raw?: string | null): { current: number | null; previ
   );
   if (amounts.length === 0) return { current: null, previous: null };
   return { current: amounts[0], previous: amounts.length > 1 ? amounts[1] : null };
-}
-
-/** How long a listing stays in the price history after it was last seen. */
-export const DEFAULT_PRICE_RETENTION_DAYS = 180;
-
-export class PriceStore {
-  private items = new Map<string, PriceRecord>();
-  private sweeps = new Map<string, SweepStat>();
-
-  constructor(
-    private readonly filePath: string,
-    private readonly retentionDays = DEFAULT_PRICE_RETENTION_DAYS
-  ) {}
-
-  /**
-   * Forget listings not seen for the retention window.
-   *
-   * The history would otherwise grow without limit: every sweep adds whatever
-   * is currently listed and nothing ever left, so it had reached 2,600 records
-   * for one watch, most of them long gone or outside the price range the sweep
-   * now covers. A price drop on something last seen six months ago is not a
-   * thing anyone is waiting for.
-   */
-  private prune(now = Date.now()): number {
-    const cutoff = now - this.retentionDays * 24 * 60 * 60 * 1000;
-    let dropped = 0;
-    for (const [url, record] of this.items) {
-      const lastTouched = Math.max(
-        record.lastSeenAt ?? 0,
-        record.goneAt ?? 0,
-        record.history?.[record.history.length - 1]?.at ?? 0
-      );
-      if (lastTouched > 0 && lastTouched < cutoff) {
-        this.items.delete(url);
-        dropped += 1;
-      }
-    }
-    return dropped;
-  }
-
-  async load(): Promise<void> {
-    try {
-      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as PersistedPrices;
-      if (parsed && parsed.version === 1 && parsed.items) {
-        this.items = new Map(Object.entries(parsed.items));
-        this.sweeps = new Map(Object.entries(parsed.sweeps ?? {}));
-        const dropped = this.prune();
-        if (dropped > 0) {
-          console.log(`Price history: expired ${dropped} listings not seen in ${this.retentionDays} days`);
-        }
-      }
-    } catch {
-      this.items = new Map();
-      this.sweeps = new Map();
-    }
-  }
-
-  lastSweep(watchName: string): SweepStat | undefined {
-    return this.sweeps.get(watchName);
-  }
-
-  recordSweep(watchName: string, seen: number): void {
-    this.sweeps.set(watchName, { at: Date.now(), seen });
-  }
-
-  get(url: string): PriceRecord | undefined {
-    return this.items.get(canonicalUrl(url));
-  }
-
-  set(record: PriceRecord): void {
-    this.items.set(canonicalUrl(record.url), record);
-  }
-
-  all(): PriceRecord[] {
-    return Array.from(this.items.values());
-  }
-
-  async persist(): Promise<void> {
-    this.prune();
-    const payload: PersistedPrices = {
-      version: 1,
-      items: Object.fromEntries(this.items),
-      sweeps: Object.fromEntries(this.sweeps)
-    };
-    await mkdir(dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.tmp`;
-    await writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
-    await rename(tmp, this.filePath);
-  }
 }
 
 /** How many consecutive complete sweeps a listing must miss before it counts as gone. */
@@ -289,6 +164,8 @@ export interface PriceSweepResult {
   authoritative: boolean;
   newlyTracked: number;
   storeSize: number;
+  /** Entries the caller must write back; applySweep itself stays pure. */
+  pending: SeenEntry[];
 }
 
 /**
@@ -300,7 +177,7 @@ export interface PriceSweepResult {
  * listings sold would be guesswork.
  */
 export function applySweep(
-  store: PriceStore,
+  store: SeenStore,
   enumeration: EnumerationResult,
   tracked: Array<Listing & { seenAt?: number }>,
   watchName: string
@@ -320,26 +197,11 @@ export function applySweep(
     sawMarker: enumeration.sawMarker,
     authoritative: false,
     newlyTracked: 0,
-    storeSize: 0
+    storeSize: 0,
+    pending: []
   };
 
-  // Seed anything we track but have never priced, so the first sweep after
-  // deployment establishes a baseline instead of reporting spurious changes.
-  for (const listing of tracked) {
-    const key = canonicalUrl(listing.url);
-    if (store.get(key)) continue;
-    const seeded = parsePrice(listing.price).current;
-    if (seeded === null) continue;
-    store.set({
-      url: key,
-      title: listing.title,
-      location: listing.location,
-      watchName,
-      history: [{ price: seeded, at: listing.seenAt ?? now }],
-      lastSeenAt: listing.seenAt ?? now,
-      missedSweeps: 0
-    });
-  }
+  const pending: SeenEntry[] = [];
 
   for (const [url, item] of enumeration.items) {
     const { current, previous } = parsePrice(item.price);
@@ -347,21 +209,35 @@ export function applySweep(
 
     const record = store.get(url);
     if (!record) {
+      // Seen by the sweep but never matched as new. Recorded as delivered:
+      // announcing a listing the watcher deliberately never alerted would turn
+      // every sweep into a backlog dump.
       result.newlyTracked += 1;
-      store.set({
+      pending.push({
         url,
+        seenAt: now,
         title: item.title,
         location: item.location,
+        price: item.price,
+        source: "facebook",
         watchName,
-        history: [{ price: current, at: now }],
+        delivered: true,
+        priceHistory: [{ price: current, at: now }],
         lastSeenAt: now,
         missedSweeps: 0
       });
       continue;
     }
 
-    const last = record.history[record.history.length - 1]?.price ?? null;
-    const history = [...record.history];
+    // Seed from the price the listing was first matched at, so a sweep after
+    // deployment measures against something real rather than starting blind.
+    const seeded = record.priceHistory ?? [];
+    if (seeded.length === 0) {
+      const first = parsePrice(record.price).current;
+      if (first !== null) seeded.push({ price: first, at: record.seenAt });
+    }
+    const last = seeded[seeded.length - 1]?.price ?? null;
+    const history = [...seeded];
 
     if (last === null) {
       history.push({ price: current, at: now });
@@ -380,12 +256,15 @@ export function applySweep(
       result.unchanged += 1;
     }
 
-    store.set({
-      url,
+    pending.push({
+      ...record,
       title: item.title || record.title,
       location: item.location ?? record.location,
+      // The listed price moves with the market; `seenAt` must not, or the
+      // listing looks newly matched and retention restarts.
+      price: item.price ?? record.price,
       watchName: record.watchName ?? watchName,
-      history,
+      priceHistory: history,
       lastSeenAt: now,
       missedSweeps: 0,
       goneAt: undefined
@@ -423,7 +302,7 @@ export function applySweep(
   result.retention = previous && previous.seen > 0 ? retention : undefined;
   result.authoritative = authoritative;
 
-  for (const record of store.all()) {
+  for (const record of store.entries()) {
     if (record.goneAt) continue;
     // This sweep only searched one watch's term, so it says nothing at all
     // about listings belonging to any other watch.
@@ -437,19 +316,20 @@ export function applySweep(
 
     const missed = (record.missedSweeps ?? 0) + 1;
     if (missed >= MISSES_BEFORE_GONE) {
-      store.set({ ...record, missedSweeps: missed, goneAt: now });
+      pending.push({ ...record, missedSweeps: missed, goneAt: now });
       result.gone.push({
         url: record.url,
         title: record.title ?? "(unknown)",
-        lastPrice: record.history[record.history.length - 1]?.price
+        lastPrice: record.priceHistory?.[record.priceHistory.length - 1]?.price
       });
     } else {
-      store.set({ ...record, missedSweeps: missed });
+      pending.push({ ...record, missedSweeps: missed });
       result.missingButUnconfirmed += 1;
     }
   }
 
-  result.storeSize = store.all().filter((r) => r.watchName === watchName).length;
+  result.storeSize = store.entries().filter((r) => r.watchName === watchName).length;
+  result.pending = pending;
   return result;
 }
 

@@ -5,10 +5,11 @@ import { DiagnosticsSink } from "./diagnostics.js";
 import { searchFacebookMarketplace } from "./facebook-marketplace.js";
 import { HealthStateStore } from "./health-state.js";
 import { fetchGumtreeHtml, parseGumtreeResults } from "./gumtree.js";
+import { DetailStore, enrichListings } from "./listing-detail.js";
 import { isNotKnownToBeOutsideRadius } from "./location-filter.js";
 import { matchListings } from "./matcher.js";
 import { filterByWatchRules } from "./listing-filter.js";
-import { WhatsappNotifier } from "./notifier.js";
+import { WhatsappNotifier, type AlertListing } from "./notifier.js";
 import { RuntimeStats } from "./observability.js";
 import { withRetry } from "./retry.js";
 import { SeenStore, type SeenEntry } from "./store.js";
@@ -59,8 +60,10 @@ export class Monitor {
   private readonly diagnostics: DiagnosticsSink;
   private readonly runtimeStats: RuntimeStats;
   private readonly health: HealthStateStore;
+  private readonly details: DetailStore;
 
   constructor(private readonly config: AppConfig, runtimeStats: RuntimeStats = new RuntimeStats()) {
+    this.details = new DetailStore(config.detailCachePath);
     this.store = new SeenStore(config.dataPath, {
       retentionDays: config.dedupeRetentionDays,
       maxEntries: config.dedupeMaxEntries
@@ -85,6 +88,71 @@ export class Monitor {
   async init(): Promise<void> {
     await this.store.load();
     await this.health.load();
+    await this.details.load();
+  }
+
+  /**
+   * The most recently seen listings for a watch, newest first.
+   *
+   * Handed to the search worker so it can stop scrolling once it reaches
+   * already-known territory. Only the recent end is worth sending: results come
+   * back newest-first, so an old listing deep in the store will never be the
+   * thing that halts a harvest, and the payload stays small.
+   */
+  private recentKnownUrls(watchName: string, limit = 300): string[] {
+    return this.store
+      .entries()
+      .filter((entry) => entry.source === "facebook" && entry.watchName === watchName)
+      .sort((a, b) => b.seenAt - a.seenAt)
+      .slice(0, limit)
+      .map((entry) => entry.url);
+  }
+
+  /**
+   * Attach detail-page data to the listings about to be alerted.
+   *
+   * Only the outgoing batch is enriched, never every match: the batch is capped
+   * at MAX_LISTINGS_PER_ALERT and detail fetching is one browser round trip per
+   * listing. Anything the fetch cannot supply — disabled, over the per-cycle
+   * budget, non-Facebook, or simply failed — falls through as the plain
+   * listing, so a detail problem can never cost us the alert itself.
+   */
+  private async withDetail(listings: Listing[]): Promise<AlertListing[]> {
+    if (!this.config.detailFetchEnabled) return listings;
+
+    let enriched;
+    try {
+      enriched = await enrichListings(this.config, this.details, listings);
+      await this.details.persist();
+    } catch (error) {
+      console.error(`Detail enrichment failed, alerting without it: ${describeError(error)}`);
+      return listings;
+    }
+
+    const byUrl = new Map(enriched.details.map((detail) => [detail.url, detail]));
+    console.log(
+      `Detail: ${enriched.fetched} fetched, ${enriched.cached} cached, ${enriched.skipped} skipped, ${enriched.failed} failed`
+    );
+
+    return listings.map((listing) => {
+      const detail = byUrl.get(listing.url);
+      if (!detail) return listing;
+      return {
+        ...listing,
+        // The search card has no real date — facebook-marketplace.ts fills in a
+        // synthetic "Listed in the last N days" from the window we requested.
+        // The detail page carries the actual relative date, so prefer it.
+        //
+        // Facebook words it as "Listed 4 hours ago in Catterick Garrison", and
+        // the worker parses `location` out of that very suffix, so keeping it
+        // would print the town twice in one line. Drop it and let the existing
+        // location field say where.
+        postedDate: (detail.postedDate ?? listing.postedDate)?.replace(/\s+in\s+.+$/i, ""),
+        description: detail.description,
+        attributes: detail.attributes,
+        sellerName: detail.sellerName
+      };
+    });
   }
 
   async runCycle(): Promise<void> {
@@ -196,7 +264,20 @@ export class Monitor {
           } else {
             try {
               facebookMatches = await withRetry(
-                () => searchFacebookMarketplace(this.config, keyword, maxAgeDays, 50, watch.distanceKm, { min: watch.minPrice, max: watch.maxPrice }),
+                () =>
+                  searchFacebookMarketplace(
+                    this.config,
+                    keyword,
+                    maxAgeDays,
+                    50,
+                    watch.distanceKm,
+                    { min: watch.minPrice, max: watch.maxPrice },
+                    // Newest-first results mean the worker can stop scrolling
+                    // once it reaches listings we already hold. On a quiet cycle
+                    // that ends the harvest after a handful of cards instead of
+                    // working down the whole grid to find nothing new.
+                    this.recentKnownUrls(watch.name)
+                  ),
                 this.config.retryAttempts,
                 this.config.retryDelayMs,
                 `facebook:${keyword}`
@@ -307,7 +388,7 @@ export class Monitor {
       const deferred = pending.length - batch.length;
 
       if (batch.length > 0) {
-        const listings = batch.map(entryToListing);
+        const listings = await this.withDetail(batch.map(entryToListing));
         try {
           await withRetry(
             () => this.notifier.sendListingAlertBatch(this.watchDisplayName(watch), listings),

@@ -50,19 +50,61 @@ function sourceLabel(listing: Listing): string {
   return listing.source === "facebook" ? "Facebook" : "Gumtree";
 }
 
-function formatListingForMessage(listing: Listing): string {
+/**
+ * A listing plus whatever the detail fetch managed to add. Detail is always
+ * optional: a listing whose page could not be fetched still has to reach the
+ * alert, just without the extra lines.
+ */
+export type AlertListing = Listing & {
+  description?: string;
+  attributes?: Record<string, string>;
+  sellerName?: string;
+};
+
+/** Attributes worth the space in a phone notification, in display order. */
+const ATTRIBUTE_PRIORITY = [
+  "mileage",
+  "year",
+  "fuel type",
+  "transmission",
+  "seats",
+  "berths",
+  "body type",
+  "engine",
+  "colour",
+  "mot",
+  "condition"
+];
+
+function formatAttributes(attributes: Record<string, string>): string | null {
+  const entries = Object.entries(attributes).filter(([, v]) => v && v.trim().length > 0);
+  if (entries.length === 0) return null;
+
+  const rank = (key: string): number => {
+    const i = ATTRIBUTE_PRIORITY.indexOf(key.toLowerCase().trim());
+    return i === -1 ? ATTRIBUTE_PRIORITY.length : i;
+  };
+  const chosen = entries.sort((a, b) => rank(a[0]) - rank(b[0])).slice(0, 4);
+  return `📋 ${chosen.map(([k, v]) => `${k}: ${truncate(v.trim(), 40)}`).join(" · ")}`;
+}
+
+function formatListingForMessage(listing: AlertListing): string {
   const meta = [sourceLabel(listing), listing.postedDate || "age unknown", listing.location].filter(Boolean).join(" · ");
+  const description = listing.description?.replace(/\s+/g, " ").trim();
   const parts = [
     listing.title,
     formatPrice(listing),
     `🧭 ${meta}`,
+    listing.attributes ? formatAttributes(listing.attributes) : null,
+    description ? `📝 ${truncate(description, 220)}` : null,
+    listing.sellerName ? `👤 ${listing.sellerName}` : null,
     `🔗 ${listing.url}`,
     `🛒 eBay: ${checkUrl(listing.title)}`
   ].filter(Boolean);
   return parts.join("\n");
 }
 
-function formatBatchMessage(keyword: string, listings: Listing[]): string {
+function formatBatchMessage(keyword: string, listings: AlertListing[]): string {
   const gumtreeCount = listings.filter((item) => item.source !== "facebook").length;
   const facebookCount = listings.filter((item) => item.source === "facebook").length;
   const schedule = process.env.MARKET_WATCH_SCHEDULE || "*/10 * * * * (every 10 mins)";
@@ -243,7 +285,7 @@ export class WhatsappNotifier {
     });
   }
 
-  async sendListingAlertBatch(keyword: string, listings: Listing[]): Promise<void> {
+  async sendListingAlertBatch(keyword: string, listings: AlertListing[]): Promise<void> {
     if (listings.length === 0) return;
     const body = formatBatchMessage(keyword, listings);
 

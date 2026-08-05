@@ -14,6 +14,20 @@ export function cleanFacebookUrl(url: string): string {
   }
 }
 
+/** What the worker reports about how the scroll ended. */
+export interface HarvestInfo {
+  harvested?: number;
+  steps?: number;
+  settleMs?: number;
+  /**
+   * Whether the scroll reached Facebook's "results from outside your search"
+   * heading. Passing it means every in-area listing has been rendered, which is
+   * the only trustworthy signal that a sweep saw the whole local market.
+   */
+  sawMarker?: boolean;
+  reason?: string;
+}
+
 function requiredNumberTokensMatch(term: string, title: string): boolean {
   const required = term.match(/\d+/g) ?? [];
   const present = new Set(title.match(/\d+/g) ?? []);
@@ -26,8 +40,45 @@ export async function searchFacebookMarketplace(
   maxAgeDays?: 1 | 7 | 30,
   maxResults = 25,
   distanceKm = 20,
-  price?: { min?: number; max?: number }
+  price?: { min?: number; max?: number },
+  knownUrls?: string[]
 ): Promise<Listing[]> {
+  return (
+    await searchFacebookMarketplaceDetailed(config, term, maxAgeDays, maxResults, distanceKm, price, knownUrls)
+  ).items;
+}
+
+/**
+ * As searchFacebookMarketplace, but also reports how many cards Facebook
+ * returned before any local filtering.
+ *
+ * Callers that page by splitting a query need the raw count: Facebook caps a
+ * search at maxResults and offers no "there is more" flag, so a full page is
+ * the only signal that results were truncated. Reading that off the filtered
+ * list hides it — a capped page of 50 that loses four to the radius filter
+ * looks like an uncapped 46, and the caller stops paging while listings remain
+ * unseen.
+ */
+export async function searchFacebookMarketplaceDetailed(
+  config: Pick<AppConfig, "browserWorkerToken" | "browserWorkerUrl" | "marketplaceAreaId" | "httpTimeoutMs">,
+  term: string,
+  maxAgeDays?: 1 | 7 | 30,
+  maxResults = 25,
+  distanceKm = 20,
+  price?: { min?: number; max?: number },
+  /**
+   * Listings the caller already has. Results come back newest-first, so once
+   * the worker reaches a run of these it can stop scrolling — everything below
+   * is older and already known.
+   *
+   * For new-listing searches only. A price sweep must never pass these: its
+   * whole purpose is re-reading the price of listings we already hold, and
+   * stopping at the first known one would skip every drop.
+   */
+  knownUrls?: string[],
+  /** Scroll budget. Long for a full sweep, short for a routine new-listing check. */
+  harvestTimeoutMs?: number
+): Promise<{ items: Listing[]; rawCount: number; harvest: HarvestInfo }> {
   if (!config.browserWorkerToken) {
     throw new Error("BROWSER_WORKER_TOKEN not configured");
   }
@@ -49,7 +100,15 @@ export async function searchFacebookMarketplace(
         maxResults,
         radiusKm: distanceKm,
         minPrice: price?.min,
-        maxPrice: price?.max
+        maxPrice: price?.max,
+        knownUrls: knownUrls && knownUrls.length > 0 ? knownUrls.slice(0, 500) : undefined,
+        harvestTimeoutMs,
+        // Facebook defaults to best_match, which ranks by relevance. A watch
+        // with maxAgeDays=30 can match far more listings than maxResults, so
+        // relevance ranking silently drops the newest ones — the only listings
+        // a watcher actually cares about. Sorting newest-first makes the
+        // harvested window the most recent N rather than an arbitrary N.
+        sortBy: "creation_time_descend"
       })
     });
 
@@ -65,7 +124,7 @@ export async function searchFacebookMarketplace(
     // records facebook_matched=0, logs success, and the listings are silently
     // lost. Treat it as a failure so the source is retried and escalated rather
     // than quietly returning nothing.
-    const harvest = data.harvest as { harvested?: number; reason?: string } | undefined;
+    const harvest = data.harvest as HarvestInfo | undefined;
     if (harvest && harvest.harvested === 0 && harvest.reason === "timeout") {
       throw new Error(
         "fb-browser-worker: no result cards rendered before harvest timeout (likely rate limited by Facebook)"
@@ -73,6 +132,9 @@ export async function searchFacebookMarketplace(
     }
 
     let items = Array.isArray(data.items) ? data.items : [];
+    // Captured before any filtering: this is what tells a paging caller whether
+    // Facebook truncated the page.
+    const rawCount = items.length;
     items = items.filter((item: { title?: string }) => requiredNumberTokensMatch(term, item.title ?? ""));
 
     // Age is now filtered by Facebook itself via daysSinceListed. It used to be
@@ -86,7 +148,7 @@ export async function searchFacebookMarketplace(
         postedDate: item.postedDate ?? (maxAgeDays === 1 ? "Listed in the last day" : `Listed in the last ${maxAgeDays} days`)
       }));
     }
-    return items
+    const filtered = items
       .filter((item: { location?: string }) => isNotKnownToBeOutsideRadius(item.location, distanceKm))
       .map((item: { title?: string; price?: string; location?: string; postedDate?: string; url: string }) => ({
         source: "facebook" as const,
@@ -97,6 +159,11 @@ export async function searchFacebookMarketplace(
         postedDate: item.postedDate,
         url: cleanFacebookUrl(item.url)
       }));
+    return {
+      items: filtered,
+      rawCount,
+      harvest: harvest ?? { harvested: filtered.length, reason: "unknown", sawMarker: false }
+    };
   } finally {
     clearTimeout(timer);
   }

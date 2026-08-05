@@ -1,5 +1,4 @@
 import type { AppConfig } from "./config.js";
-import { isNotKnownToBeOutsideRadius } from "./location-filter.js";
 import type { Listing } from "./types.js";
 
 export function cleanFacebookUrl(url: string): string {
@@ -148,8 +147,13 @@ export async function searchFacebookMarketplaceDetailed(
         postedDate: item.postedDate ?? (maxAgeDays === 1 ? "Listed in the last day" : `Listed in the last ${maxAgeDays} days`)
       }));
     }
+    // No local distance filtering. Marketplace applies the radius itself via the
+    // session location (see the worker's ensureRadius) and marks where it stops
+    // with its own "results from outside your search" heading. Re-deriving
+    // distance here from a hand-maintained gazetteer meant two different answers
+    // for one listing — "Catterick Camp" was kept and "Catterick Garrison"
+    // dropped, same van — so the platform is now the single authority.
     const filtered = items
-      .filter((item: { location?: string }) => isNotKnownToBeOutsideRadius(item.location, distanceKm))
       .map((item: { title?: string; price?: string; location?: string; postedDate?: string; url: string }) => ({
         source: "facebook" as const,
         matchedKeyword: term,

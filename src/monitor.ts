@@ -6,7 +6,6 @@ import { searchFacebookMarketplace } from "./facebook-marketplace.js";
 import { HealthStateStore } from "./health-state.js";
 import { fetchGumtreeHtml, parseGumtreeResults } from "./gumtree.js";
 import { DetailStore, enrichListings } from "./listing-detail.js";
-import { isNotKnownToBeOutsideRadius } from "./location-filter.js";
 import { matchListings } from "./matcher.js";
 import { filterByWatchRules } from "./listing-filter.js";
 import { WhatsappNotifier, type AlertListing } from "./notifier.js";
@@ -239,7 +238,10 @@ export class Monitor {
             `fetch:${keyword}`
           );
           parsed = parseGumtreeResults(html);
-          localParsed = parsed.filter((item) => isNotKnownToBeOutsideRadius(item.location, watch.distanceKm));
+          // Gumtree searches from our postcode with an explicit distance, so its
+          // results are already inside the radius. Filtering them again locally
+          // could only remove correctly-included listings.
+          localParsed = parsed;
           recentLocalParsed = localParsed.filter((item) => {
             const age = postedAgeDays(item.postedDate);
             return age !== null && age <= maxAgeDays;

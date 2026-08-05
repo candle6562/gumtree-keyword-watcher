@@ -3,7 +3,6 @@ import "dotenv/config";
 import { loadConfig } from "../src/config.js";
 import { searchFacebookMarketplace } from "../src/facebook-marketplace.js";
 import { fetchGumtreeHtml, parseGumtreeResults } from "../src/gumtree.js";
-import { isNotKnownToBeOutsideRadius } from "../src/location-filter.js";
 import { filterByWatchRules } from "../src/listing-filter.js";
 import { matchListings } from "../src/matcher.js";
 import { WhatsappNotifier } from "../src/notifier.js";
@@ -31,13 +30,12 @@ function postedAgeDays(postedDate?: string): number | null {
 type ScanStats = {
   gumtreeScanned: number;
   droppedKeyword: number;
-  droppedArea: number;
   droppedAge: number;
   facebookReturned: number;
 };
 
 function emptyStats(): ScanStats {
-  return { gumtreeScanned: 0, droppedKeyword: 0, droppedArea: 0, droppedAge: 0, facebookReturned: 0 };
+  return { gumtreeScanned: 0, droppedKeyword: 0, droppedAge: 0, facebookReturned: 0 };
 }
 
 async function searchGumtree24h(
@@ -54,14 +52,11 @@ async function searchGumtree24h(
   const matched = matchListings(parsed, term);
   stats.droppedKeyword += parsed.length - matched.length;
 
-  const local = matched.filter((item) => isNotKnownToBeOutsideRadius(item.location, distanceKm));
-  stats.droppedArea += matched.length - local.length;
-
-  const recent = local.filter((item) => {
+  const recent = matched.filter((item) => {
     const age = postedAgeDays(item.postedDate);
     return age !== null && age <= 1;
   });
-  stats.droppedAge += local.length - recent.length;
+  stats.droppedAge += matched.length - recent.length;
 
   return recent;
 }
@@ -122,12 +117,12 @@ async function main(): Promise<void> {
     const fresh = items.length - cachedHits;
     const watchCacheEntries = store.entries().filter((entry) => entry.watchName === watch.name);
     const watchCacheAdded24h = watchCacheEntries.filter((entry) => entry.seenAt >= sinceMs).length;
-    const ignored = stats.droppedKeyword + stats.droppedArea + stats.droppedAge;
+    const ignored = stats.droppedKeyword + stats.droppedAge;
     lines.push(`Watch: ${watch.name}`);
     lines.push(`Terms: ${watch.terms.join(", ")}`);
     lines.push(`Distance: ${watch.distanceKm} km`);
     lines.push(`Scanned: ${stats.gumtreeScanned} Gumtree${stats.facebookReturned > 0 ? ` + ${stats.facebookReturned} Facebook` : ""}`);
-    lines.push(`Ignored: ${ignored} (keyword ${stats.droppedKeyword}, out of area ${stats.droppedArea}, over 24h ${stats.droppedAge})`);
+    lines.push(`Ignored: ${ignored} (keyword ${stats.droppedKeyword}, over 24h ${stats.droppedAge})`);
     lines.push(`Found live last 24h: ${items.length}`);
     if (ruleFiltered > 0) lines.push(`Filtered by rules: ${ruleFiltered}`);
     lines.push(`New right now: ${fresh}`);

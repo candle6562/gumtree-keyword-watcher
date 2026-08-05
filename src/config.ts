@@ -70,6 +70,13 @@ const envSchema = z.object({
   // Six months, not the thirty days a pure dedupe cache needed. The store now
   // also holds price history, and a drop is measured against what a listing
   // asked when we first saw it — evicting that would lose the comparison.
+  // Gap between keywords within a cycle. A watch with several terms otherwise
+  // fires them all at once, which reads as a burst to the source.
+  //
+  // Twenty seconds, because four was not enough: five terms at four-second
+  // spacing still drew a Gumtree challenge after the second keyword. Five terms
+  // now spread over eighty seconds, comfortably inside a ten-minute cycle.
+  KEYWORD_SPACING_MS: z.coerce.number().int().nonnegative().default(20000),
   DEDUPE_RETENTION_DAYS: z.coerce.number().int().positive().default(180),
   // Every sweep records the whole in-range market, not just what was alerted,
   // so the ceiling has to clear the size of that market with room to spare.
@@ -120,6 +127,7 @@ export interface AppConfig {
   retryAttempts: number;
   retryDelayMs: number;
   dataPath: string;
+  keywordSpacingMs: number;
   dedupeRetentionDays: number;
   dedupeMaxEntries: number;
   diagnosticsLogPath: string;
@@ -222,6 +230,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     retryAttempts: parsed.RETRY_ATTEMPTS,
     retryDelayMs: parsed.RETRY_DELAY_MS,
     dataPath: parsed.DATA_PATH,
+    keywordSpacingMs: parsed.KEYWORD_SPACING_MS,
     dedupeRetentionDays: parsed.DEDUPE_RETENTION_DAYS,
     dedupeMaxEntries: parsed.DEDUPE_MAX_ENTRIES,
     diagnosticsLogPath: parsed.DIAGNOSTICS_LOG_PATH,

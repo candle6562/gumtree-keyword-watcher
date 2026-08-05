@@ -271,7 +271,13 @@ export class Monitor {
       let totalMatched = 0;
       let newThisWatch = 0;
 
-      for (const keyword of watch.terms) {
+      for (const [keywordIndex, keyword] of watch.terms.entries()) {
+        // Space the keywords out. Five terms fired back to back is five Gumtree
+        // requests in a second, repeated every ten minutes, which is what drew
+        // a bot challenge once the watch grew past a single term.
+        if (keywordIndex > 0 && this.config.keywordSpacingMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, this.config.keywordSpacingMs));
+        }
         // Sources are fetched independently. They used to share one try block,
         // so a Facebook failure threw away Gumtree matches found in the same
         // pass — which is why three days of dead-worker downtime produced no
@@ -527,7 +533,12 @@ export class Monitor {
       `${sourceFailures} source failure(s) this cycle.`,
       `Browser worker: ${workerDetail}`,
       "",
-      "Listings matched during the outage are held and will be sent once delivery recovers."
+      // Say which of the two failed, because the consequence is opposite. A
+      // delivery failure holds matches and retries them; a source failure means
+      // the listings were never seen, and nothing is queued to recover.
+      sourceFailures > 0
+        ? "A source is refusing requests, so listings it holds were never seen this cycle. Nothing is queued; the next cycle tries again."
+        : "Listings matched during the outage are held and will be sent once delivery recovers."
     ].join("\n");
 
     try {

@@ -12,6 +12,12 @@ export async function withRetry<T>(
     } catch (error) {
       lastError = error;
       const details = error instanceof Error ? error.message : String(error);
+      // A source that is refusing us will refuse the retry too, and each one
+      // deepens the block. Give up on this keyword and let the next cycle try.
+      if ((error as { rateLimited?: boolean })?.rateLimited) {
+        console.warn(`${label}: rate limited, not retrying (${details})`);
+        break;
+      }
       if (tryCount === attempts) {
         console.error(`${label}: failed after ${attempts} attempts (${details})`);
         break;

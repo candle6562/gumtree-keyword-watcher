@@ -37,32 +37,6 @@ export function parsePrice(raw?: string | null): { current: number | null; previ
   return { current: amounts[0], previous: amounts.length > 1 ? amounts[1] : null };
 }
 
-/** How many consecutive complete sweeps a listing must miss before it counts as gone. */
-export const MISSES_BEFORE_GONE = 2;
-
-/**
- * How far this sweep's live count may fall below the previous sweep's before
- * its absences stop being trustworthy.
- *
- * Measured against the last sweep, never against how many listings we track.
- * Tracked count is the wrong denominator: sold listings are *supposed* to go
- * missing, so "seen / tracked" falls precisely when the feature is working, and
- * a guard built on it can never confirm a sale. Comparing like with like asks
- * the only question that matters — did the search itself still work?
- */
-export const MIN_SWEEP_RETENTION = 0.5;
-
-/**
- * Fewest live listings a sweep must see before its absences may condemn anything.
- *
- * Retention alone is not enough: it compares this sweep to the last, so a
- * search that returns one result twice running looks perfectly stable at 100%
- * and would confirm every other tracked listing as sold. A term that has
- * stopped matching, or a source quietly degrading, both look exactly like that.
- * Below this floor the sweep simply is not a picture of a market.
- */
-export const MIN_SEEN_TO_CONDEMN = 10;
-
 export interface EnumerationResult {
   items: Map<string, Listing>;
   queries: number;
@@ -154,14 +128,12 @@ export interface PriceSweepResult {
   unchanged: number;
   drops: PriceChange[];
   rises: PriceChange[];
-  gone: Array<{ url: string; title: string; lastPrice?: number }>;
-  missingButUnconfirmed: number;
+  /** Seen previously but not in this sweep. Reported, never interpreted. */
+  notSeenThisSweep: number;
   /** Diagnostics, surfaced in the report so a bad run is visible from the phone. */
   reason: string;
   sawMarker: boolean;
   previousSeen?: number;
-  retention?: number;
-  authoritative: boolean;
   newlyTracked: number;
   storeSize: number;
   /** Entries the caller must write back; applySweep itself stays pure. */
@@ -191,11 +163,9 @@ export function applySweep(
     unchanged: 0,
     drops: [],
     rises: [],
-    gone: [],
-    missingButUnconfirmed: 0,
+    notSeenThisSweep: 0,
     reason: enumeration.reason,
     sawMarker: enumeration.sawMarker,
-    authoritative: false,
     newlyTracked: 0,
     storeSize: 0,
     pending: []
@@ -271,62 +241,20 @@ export function applySweep(
     });
   }
 
-  // Decide whether this sweep's absences mean anything, by asking whether the
-  // search still works — not whether the listings we track showed up. A sweep
-  // that returns roughly what the last one did is healthy, and anything missing
-  // from it is genuinely missing. A sweep that collapses (throttled, term
-  // stopped matching, worker degraded) is telling us nothing about the market.
+  // Absence is deliberately not interpreted.
   //
-  // The first sweep has no baseline, but it also cannot condemn anything:
-  // MISSES_BEFORE_GONE requires two consecutive sweeps, so by the time a
-  // removal can be confirmed a baseline always exists.
-  const previous = store.lastSweep(watchName);
-  const retention = previous && previous.seen > 0 ? result.seen / previous.seen : 1;
-  const healthy = retention >= MIN_SWEEP_RETENTION;
-  const substantial = result.seen >= MIN_SEEN_TO_CONDEMN;
-  const authoritative = enumeration.complete && healthy && substantial;
-
-  if (enumeration.complete && !healthy) {
-    console.warn(
-      `Sweep for '${watchName}' saw ${result.seen}, down from ${previous?.seen} last time ` +
-        `(${(retention * 100).toFixed(0)}%) — treating as a search failure, not ${result.tracked} sales`
-    );
-  }
-  if (enumeration.complete && healthy && !substantial) {
-    console.warn(
-      `Sweep for '${watchName}' saw only ${result.seen} listings — too few to conclude anything about the rest`
-    );
-  }
+  // A listing missing from a sweep might have sold, or been delisted, or had
+  // its price edited out of range, or simply sat beyond where the scroll
+  // stopped — and with the market larger than the result ceiling, that last
+  // cause dominates. The only reliable signal was the redirect on a removed
+  // listing's own page, and fetching those is the traffic pattern that gets a
+  // scraper blocked. An earlier version of this guessed from absence and
+  // announced 46 vehicles as sold that were all still for sale.
   store.recordSweep(watchName, result.seen);
-  result.previousSeen = previous?.seen;
-  result.retention = previous && previous.seen > 0 ? retention : undefined;
-  result.authoritative = authoritative;
-
-  for (const record of store.entries()) {
-    if (record.goneAt) continue;
-    // This sweep only searched one watch's term, so it says nothing at all
-    // about listings belonging to any other watch.
-    if (record.watchName !== watchName) continue;
-    if (enumeration.items.has(canonicalUrl(record.url))) continue;
-
-    if (!authoritative) {
-      result.missingButUnconfirmed += 1;
-      continue;
-    }
-
-    const missed = (record.missedSweeps ?? 0) + 1;
-    if (missed >= MISSES_BEFORE_GONE) {
-      pending.push({ ...record, missedSweeps: missed, goneAt: now });
-      result.gone.push({
-        url: record.url,
-        title: record.title ?? "(unknown)",
-        lastPrice: record.priceHistory?.[record.priceHistory.length - 1]?.price
-      });
-    } else {
-      pending.push({ ...record, missedSweeps: missed });
-      result.missingButUnconfirmed += 1;
-    }
-  }
+  result.notSeenThisSweep = store
+    .entries()
+    .filter((r) => r.watchName === watchName && !r.goneAt)
+    .filter((r) => !enumeration.items.has(canonicalUrl(r.url))).length;
 
   result.storeSize = store.entries().filter((r) => r.watchName === watchName).length;
   result.pending = pending;
@@ -365,30 +293,19 @@ export function formatPriceReport(result: PriceSweepResult, watchLabel: string):
     lines.push("", `📈 ${result.rises.length} price increase${result.rises.length === 1 ? "" : "s"} (not listed)`);
   }
 
-  if (result.gone.length > 0) {
-    lines.push("", `🏁 ${result.gone.length} sold or withdrawn`);
-    for (const gone of result.gone.slice(0, 10)) {
-      const price = gone.lastPrice ? ` (was £${gone.lastPrice.toLocaleString("en-GB")})` : "";
-      lines.push(`• ${gone.title}${price}`);
-    }
-    if (result.gone.length > 10) lines.push(`• …and ${result.gone.length - 10} more`);
-  }
-
-  if (result.missingButUnconfirmed > 0) {
-    lines.push("", `❓ ${result.missingButUnconfirmed} not seen this sweep (awaiting confirmation)`);
+  if (result.notSeenThisSweep > 0) {
+    lines.push("", `👀 ${result.notSeenThisSweep} tracked listings not seen this sweep`);
   }
 
   lines.push("", "🔧 debug");
   lines.push(`scroll ended: ${result.reason}${result.sawMarker ? " (reached out-of-area boundary)" : ""}`);
   if (result.previousSeen !== undefined) {
-    const pct = result.retention !== undefined ? ` (${Math.round(result.retention * 100)}%)` : "";
-    lines.push(`live vs last sweep: ${result.seen} vs ${result.previousSeen}${pct}`);
+    lines.push(`live vs last sweep: ${result.seen} vs ${result.previousSeen}`);
   } else {
     lines.push("live vs last sweep: no baseline yet (first run)");
   }
   lines.push(`new to price history: ${result.newlyTracked}`);
   lines.push(`price history size: ${result.storeSize}`);
-  lines.push(`removals confirmable: ${result.authoritative ? "yes" : "no — sweep not authoritative"}`);
 
   return lines.join("\n");
 }

@@ -98,6 +98,17 @@ function triState(value: boolean | null | undefined): string {
 }
 
 function formatVehicle(vehicle: NonNullable<AlertListing["vehicle"]>): string[] {
+  // Nothing known about any of it means this is not a vehicle — a roof rack or
+  // a chair-bed matched the search. A row of question marks is worse than
+  // silence: it implies we looked at a van and could not tell.
+  const knowsSomething =
+    typeof vehicle.mileage === "number" ||
+    typeof vehicle.mpg === "number" ||
+    vehicle.aircon != null ||
+    vehicle.converted != null ||
+    vehicle.valueForMoney !== undefined;
+  if (!knowsSomething) return [];
+
   const lines: string[] = [];
   const bits: string[] = [];
 

@@ -1,3 +1,14 @@
+/**
+ * Refusal by the source, as opposed to a request that happened to fail.
+ *
+ * Retrying it makes matters worse: three attempts per keyword across five
+ * keywords turned one challenged cycle into fifteen requests, which is how a
+ * temporary block becomes a persistent one.
+ */
+export class RateLimitedError extends Error {
+  readonly rateLimited = true;
+}
+
 import { load } from "cheerio";
 import type { RawListing } from "./types.js";
 
@@ -141,7 +152,7 @@ export async function fetchGumtreeHtml(
     // no listings in it and the cycle logs a cheerful `parsed=0, success`,
     // making a hard block look exactly like "nothing for sale today".
     if (isBotChallenge(html)) {
-      throw new Error(
+      throw new RateLimitedError(
         `Gumtree served a bot challenge instead of results (status ${response.status}, ${html.length} bytes) — likely rate limited`
       );
     }

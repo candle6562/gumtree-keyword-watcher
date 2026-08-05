@@ -73,11 +73,43 @@ export function parsePrice(raw?: string | null): { current: number | null; previ
   return { current: amounts[0], previous: amounts.length > 1 ? amounts[1] : null };
 }
 
+/** How long a listing stays in the price history after it was last seen. */
+export const DEFAULT_PRICE_RETENTION_DAYS = 180;
+
 export class PriceStore {
   private items = new Map<string, PriceRecord>();
   private sweeps = new Map<string, SweepStat>();
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly retentionDays = DEFAULT_PRICE_RETENTION_DAYS
+  ) {}
+
+  /**
+   * Forget listings not seen for the retention window.
+   *
+   * The history would otherwise grow without limit: every sweep adds whatever
+   * is currently listed and nothing ever left, so it had reached 2,600 records
+   * for one watch, most of them long gone or outside the price range the sweep
+   * now covers. A price drop on something last seen six months ago is not a
+   * thing anyone is waiting for.
+   */
+  private prune(now = Date.now()): number {
+    const cutoff = now - this.retentionDays * 24 * 60 * 60 * 1000;
+    let dropped = 0;
+    for (const [url, record] of this.items) {
+      const lastTouched = Math.max(
+        record.lastSeenAt ?? 0,
+        record.goneAt ?? 0,
+        record.history?.[record.history.length - 1]?.at ?? 0
+      );
+      if (lastTouched > 0 && lastTouched < cutoff) {
+        this.items.delete(url);
+        dropped += 1;
+      }
+    }
+    return dropped;
+  }
 
   async load(): Promise<void> {
     try {
@@ -85,6 +117,10 @@ export class PriceStore {
       if (parsed && parsed.version === 1 && parsed.items) {
         this.items = new Map(Object.entries(parsed.items));
         this.sweeps = new Map(Object.entries(parsed.sweeps ?? {}));
+        const dropped = this.prune();
+        if (dropped > 0) {
+          console.log(`Price history: expired ${dropped} listings not seen in ${this.retentionDays} days`);
+        }
       }
     } catch {
       this.items = new Map();
@@ -113,6 +149,7 @@ export class PriceStore {
   }
 
   async persist(): Promise<void> {
+    this.prune();
     const payload: PersistedPrices = {
       version: 1,
       items: Object.fromEntries(this.items),

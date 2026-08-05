@@ -26,7 +26,10 @@ async function main(): Promise<void> {
   });
   await seen.load();
 
-  const prices = new PriceStore(process.env.PRICE_HISTORY_PATH || ".data/price-history.json");
+  const prices = new PriceStore(
+    process.env.PRICE_HISTORY_PATH || ".data/price-history.json",
+    Number(process.env.PRICE_HISTORY_RETENTION_DAYS || 180)
+  );
   await prices.load();
 
   // The sweep stays inside the watch's own price bracket. Looking wider would

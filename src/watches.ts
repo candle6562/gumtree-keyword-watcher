@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
+/** Search kinds. Only "vehicle" enables the extra per-listing assessment. */
+export type WatchType = "default" | "vehicle";
+
+export const WATCH_TYPES: WatchType[] = ["default", "vehicle"];
+
 export interface MarketWatch {
   name: string;
   enabled: boolean;
@@ -14,12 +19,14 @@ export interface MarketWatch {
   /** Gumtree search category slug; default "for-sale" is general goods. */
   gumtreeCategory?: string;
   /**
-   * What is being searched for. "vehicle" turns on the extra assessment —
-   * mileage, air conditioning, whether it is already converted, and a value
-   * rating — which is only meaningful for vehicles and costs a model call per
-   * listing, so it stays off unless asked for.
+   * What is being searched for.
+   *
+   * "vehicle" turns on the extra assessment — mileage, air conditioning,
+   * whether it is already converted, and a value rating — and switches the
+   * alert to the tighter vehicle layout. It costs a model call per listing and
+   * means nothing for, say, a watch, so anything else stays "default".
    */
-  kind?: "vehicle";
+  type: WatchType;
   terms: string[];
 }
 
@@ -65,7 +72,7 @@ export function loadWatches(filePath: string = defaultWatchesFilePath()): Market
           /^[a-z0-9-]+$/.test((watch as Partial<MarketWatch>).gumtreeCategory as string)
             ? ((watch as Partial<MarketWatch>).gumtreeCategory as string)
             : undefined,
-        kind: (watch as Partial<MarketWatch>).kind === "vehicle" ? "vehicle" : undefined,
+        type: (watch as Partial<MarketWatch>).type === "vehicle" ? "vehicle" : "default",
         terms: Array.isArray(watch.terms)
           ? Array.from(new Set(watch.terms.map((term) => String(term).trim().toLowerCase()).filter(Boolean)))
           : []

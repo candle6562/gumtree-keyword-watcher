@@ -171,7 +171,7 @@ export class Monitor {
     listings: AlertListing[],
     details: Map<string, ListingDetail>
   ): Promise<AlertListing[]> {
-    if (watch.kind !== "vehicle") return listings;
+    if (watch.type !== "vehicle") return listings;
     const market = buildMarketContext(this.store.entries(), watch.name);
     const { listings: assessed, outcome } = await assessVehicles(
       this.config,
@@ -431,7 +431,7 @@ export class Monitor {
           await withRetry(
             () =>
               this.notifier.sendListingAlertBatch(this.watchDisplayName(watch), listings, {
-                vehicleWatch: watch.kind === "vehicle"
+                vehicleWatch: watch.type === "vehicle"
               }),
             this.config.retryAttempts,
             this.config.retryDelayMs,

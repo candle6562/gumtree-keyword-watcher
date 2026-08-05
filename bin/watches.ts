@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { findWatch, loadWatches, normalizeName, saveWatches, type MarketWatch } from "../src/watches.js";
+import { findWatch, loadWatches, normalizeName, saveWatches, type MarketWatch, WATCH_TYPES, type WatchType } from "../src/watches.js";
 
 function usage(): never {
   throw new Error(
-    "Usage: watches <list|create|show|delete|add|remove|pause|resume|frequency|distance|min-price|max-price|max-age|category|notify-on-run|rename> [watch] [value]"
+    "Usage: watches <list|create|show|delete|add|remove|pause|resume|frequency|distance|min-price|max-price|max-age|category|type|notify-on-run|rename> [watch] [value]"
   );
 }
 
@@ -29,6 +29,7 @@ function formatWatch(watch: MarketWatch): string {
     `Max price: ${watch.maxPrice !== undefined ? `£${watch.maxPrice}` : "off"}`,
     `Max age: ${watch.maxAgeDays ?? 1} day(s)`,
     `Gumtree category: ${watch.gumtreeCategory ?? "for-sale"}`,
+    `Type: ${watch.type ?? "default"}${watch.type === "vehicle" ? " (mileage, aircon, conversion and value rating)" : ""}`,
     `Notify on run alerts: ${watch.noChange ? "on" : "off"}`,
     "Terms:",
     ...(watch.terms.length ? watch.terms.map((term) => `- ${term}`) : ["- none"])
@@ -142,6 +143,24 @@ function main(): void {
       watch.distanceKm = distanceKm;
       saveWatches(watches);
       console.log(`Distance for ${watch.name}: ${distanceKm} km`);
+      return;
+    }
+    case "type": {
+      const { name, rest } = parseWatchAndRest(watches, args);
+      const raw = rest.join(" ").trim().toLowerCase();
+      const watch = findWatch(watches, name);
+      if (!watch) throw new Error(`Watch not found: ${name}`);
+      if (!WATCH_TYPES.includes(raw as WatchType)) {
+        throw new Error(`Usage: watches type <watch> <${WATCH_TYPES.join("|")}>`);
+      }
+      watch.type = raw as WatchType;
+      saveWatches(watches);
+      console.log(
+        `Type for ${watch.name}: ${watch.type}` +
+          (watch.type === "vehicle"
+            ? " — alerts will carry mileage, aircon, conversion and a value rating"
+            : "")
+      );
       return;
     }
     case "category": {

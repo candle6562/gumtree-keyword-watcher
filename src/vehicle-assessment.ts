@@ -11,7 +11,7 @@ import type { MarketWatch } from "./watches.js";
  * conversion is already done, and what the asking price looks like against
  * comparable vehicles.
  *
- * Gated on `watch.kind === "vehicle"` because it costs a model call per listing
+ * Gated on `watch.type === "vehicle"` because it costs a model call per listing
  * and means nothing for a search like a Garmin watch.
  */
 
@@ -107,7 +107,7 @@ export async function assessVehicles(
   market: MarketContext | undefined
 ): Promise<{ listings: AlertListing[]; outcome: AssessmentOutcome }> {
   const outcome: AssessmentOutcome = { assessed: 0, failed: 0 };
-  if (watch.kind !== "vehicle" || !config.openrouterApiKey) return { listings, outcome };
+  if (watch.type !== "vehicle" || !config.openrouterApiKey) return { listings, outcome };
 
   let spec;
   try {

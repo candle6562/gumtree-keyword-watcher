@@ -6,6 +6,7 @@
       "frequency": "10m",
       "noChange": false,
       "distanceKm": 20,
+      "type": "default",
       "terms": [
         "garmin forerunner 255"
       ]
@@ -20,10 +21,10 @@
       "maxPrice": 10000,
       "maxAgeDays": 30,
       "gumtreeCategory": "campervans-motorhomes",
+      "type": "vehicle",
       "terms": [
         "camper van"
-      ],
-      "kind": "vehicle"
+      ]
     }
   ]
 }

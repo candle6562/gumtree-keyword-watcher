@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import type { TriageResult } from "./index.js";
+import { PROMPT_VERSION, type TriageResult } from "./index.js";
 
 interface CacheEntry {
   result: TriageResult;
@@ -37,7 +37,7 @@ export class TriageCache {
   }
 
   private key(url: string, specHash: string, model: string): string {
-    return `${specHash}|${model}|${url}`;
+    return `${PROMPT_VERSION}|${specHash}|${model}|${url}`;
   }
 
   async load(): Promise<void> {

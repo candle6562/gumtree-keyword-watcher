@@ -30,26 +30,49 @@ export interface TriageResult {
   usage?: Usage;
 }
 
+/**
+ * Bump when the prompt changes: cached verdicts from an older prompt are
+ * answers to a different question.
+ */
+export const PROMPT_VERSION = "v2";
+
 const SYSTEM_PROMPT = `You assess second-hand vehicle adverts against a buyer's written specification.
 
-Judge only what the advert actually says. Never infer a fact the seller has not
-stated: if the advert does not mention air conditioning, that is an unknown, not
-an absence. This distinction matters — the buyer uses "unknowns" as the list of
-questions to ask the seller, and a fabricated fact wastes a viewing.
+THE MOST IMPORTANT RULE: an advert that does not mention something has not
+failed it. Sellers omit almost everything — emissions standard, air
+conditioning, seat count, service history. Silence is an unknown, never a
+reject, and never a concern.
 
-Scoring, 0-100:
-  85-100 shortlist  meets the essentials and most preferences
-  60-84  maybe      plausible but with real gaps or concerns
-  0-59   reject     fails an essential requirement
+Put anything the advert does not state into "unknowns". Only put something in
+"hardRejects" when the advert positively establishes it, either because the
+seller says so or because it follows inescapably from a stated fact (a stated
+price above the budget, a stated year below a stated minimum).
+
+Worked example, because this is where assessments usually go wrong:
+  Spec: "Diesel must be confirmed Euro 6." Advert says nothing about emissions.
+  WRONG: hardReject "diesel not confirmed Euro 6"
+  RIGHT: unknown "Euro emissions standard not stated - ask the seller"
+The buyer resolves unknowns by asking the seller or checking DVLA. Rejecting on
+silence throws away every viable vehicle.
+
+Distinguish requirements by their wording. "Must", "essential" and "reject" are
+hard. "Preferably", "ideally" and "strong preference" are soft: falling short
+lowers the score and belongs in "concerns", never in "hardRejects".
+
+Scoring, 0-100. Judge on what is known, and do not punish a listing merely for
+being brief:
+  85-100 shortlist  nothing known to fail; most stated facts fit well
+  60-84  maybe      plausible, with gaps or soft-requirement shortfalls
+  0-59   reject     positively fails something the spec calls essential
 
 Reply with JSON only:
 {
   "score": number,
   "verdict": "shortlist" | "maybe" | "reject",
-  "matched": [string],      // spec points this advert satisfies
-  "concerns": [string],     // spec points it fails or looks weak on
-  "hardRejects": [string],  // items from the spec's "reject or strongly flag" list
-  "unknowns": [string],     // spec points the advert does not address
+  "matched": [string],      // spec points the advert positively satisfies
+  "concerns": [string],     // stated facts that fall short, incl. soft misses
+  "hardRejects": [string],  // essentials the advert positively fails - usually empty
+  "unknowns": [string],     // spec points the advert is silent on
   "registration": string | null,  // only if the advert states it
   "extracted": {
     "year": number | null, "mileage": number | null, "fuel": string | null,
@@ -119,6 +142,8 @@ export async function triageListing(
     // deepseek-v4-flash is a reasoning model: without a cap on effort it spends
     // the whole token budget thinking and returns empty content.
     reasoningEffort: "low",
+    // Long adverts against a long spec overran 4000 and returned empty content.
+    maxTokens: 8000,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: buildUserPrompt(spec, listing) }

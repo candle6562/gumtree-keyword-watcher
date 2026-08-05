@@ -15,10 +15,10 @@
       "enabled": true,
       "frequency": "10m",
       "noChange": false,
-      "distanceKm": 20,
+      "distanceKm": 80,
       "minPrice": 1000,
       "maxPrice": 10000,
-      "maxAgeDays": 1,
+      "maxAgeDays": 30,
       "gumtreeCategory": "campervans-motorhomes",
       "terms": [
         "camper van"

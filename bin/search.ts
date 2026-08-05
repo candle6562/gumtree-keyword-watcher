@@ -2,7 +2,7 @@
 import "dotenv/config";
 import { loadConfig } from "../src/config.js";
 import { fetchGumtreeHtml, parseGumtreeResults } from "../src/gumtree.js";
-import { isWithinNorthShieldsRadius } from "../src/location-filter.js";
+import { isNotKnownToBeOutsideRadius } from "../src/location-filter.js";
 import { matchListings } from "../src/matcher.js";
 
 interface CombinedResult {
@@ -128,7 +128,7 @@ async function searchFacebook(config: ReturnType<typeof loadConfig>, term: strin
     const data = await response.json();
     const items = Array.isArray(data.items) ? data.items : [];
     return items
-      .filter((item: { location?: string }) => isWithinNorthShieldsRadius(item.location))
+      .filter((item: { location?: string }) => isNotKnownToBeOutsideRadius(item.location))
       .map((item: { title?: string; price?: string; location?: string; postedDate?: string; url: string }) => ({
         source: "facebook" as const,
         title: item.title ?? term,

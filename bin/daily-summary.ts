@@ -3,7 +3,7 @@ import "dotenv/config";
 import { loadConfig } from "../src/config.js";
 import { searchFacebookMarketplace } from "../src/facebook-marketplace.js";
 import { fetchGumtreeHtml, parseGumtreeResults } from "../src/gumtree.js";
-import { isWithinNorthShieldsRadius } from "../src/location-filter.js";
+import { isNotKnownToBeOutsideRadius } from "../src/location-filter.js";
 import { filterByWatchRules } from "../src/listing-filter.js";
 import { matchListings } from "../src/matcher.js";
 import { WhatsappNotifier } from "../src/notifier.js";
@@ -27,12 +27,43 @@ function postedAgeDays(postedDate?: string): number | null {
   return null;
 }
 
-async function searchGumtree24h(config: ReturnType<typeof loadConfig>, term: string, distanceKm: number): Promise<Listing[]> {
+/** Per-watch tally of what each stage of the funnel threw away. */
+type ScanStats = {
+  gumtreeScanned: number;
+  droppedKeyword: number;
+  droppedArea: number;
+  droppedAge: number;
+  facebookReturned: number;
+};
+
+function emptyStats(): ScanStats {
+  return { gumtreeScanned: 0, droppedKeyword: 0, droppedArea: 0, droppedAge: 0, facebookReturned: 0 };
+}
+
+async function searchGumtree24h(
+  config: ReturnType<typeof loadConfig>,
+  term: string,
+  distanceKm: number,
+  stats: ScanStats
+): Promise<Listing[]> {
   const html = await fetchGumtreeHtml(config.postcode, term, config.httpTimeoutMs, distanceKm);
-  return matchListings(parseGumtreeResults(html), term).filter((item) => isWithinNorthShieldsRadius(item.location, distanceKm)).filter((item) => {
+
+  const parsed = parseGumtreeResults(html);
+  stats.gumtreeScanned += parsed.length;
+
+  const matched = matchListings(parsed, term);
+  stats.droppedKeyword += parsed.length - matched.length;
+
+  const local = matched.filter((item) => isNotKnownToBeOutsideRadius(item.location, distanceKm));
+  stats.droppedArea += matched.length - local.length;
+
+  const recent = local.filter((item) => {
     const age = postedAgeDays(item.postedDate);
     return age !== null && age <= 1;
   });
+  stats.droppedAge += local.length - recent.length;
+
+  return recent;
 }
 
 async function main(): Promise<void> {
@@ -57,16 +88,27 @@ async function main(): Promise<void> {
     config.httpTimeoutMs
   );
 
+  // A target with no enabled watches has nothing to report. Sending anyway
+  // delivers a header and nothing else, which is what this digest did daily
+  // for the `tom-direct` target while its watches file sat empty.
+  if (watches.length === 0) {
+    console.log(`No enabled watches for target ${process.env.MARKET_WATCH_TARGET_ID ?? "(unset)"}; skipping digest`);
+    return;
+  }
+
   const sinceMs = Date.now() - 24 * 60 * 60 * 1000;
   const lines: string[] = ["📊 Daily market summary — last 24h", "08:00 daily digest", ""];
 
   for (const watch of watches) {
     const byUrl = new Map<string, Listing>();
+    const stats = emptyStats();
     for (const term of watch.terms) {
       try {
-        for (const item of await searchGumtree24h(config, term, watch.distanceKm)) byUrl.set(item.url, item);
+        for (const item of await searchGumtree24h(config, term, watch.distanceKm, stats)) byUrl.set(item.url, item);
         if (config.marketplaceFacebookEnabled) {
-          for (const item of await searchFacebookMarketplace(config, term, 1, 20, watch.distanceKm)) byUrl.set(item.url, item);
+          const fbItems = await searchFacebookMarketplace(config, term, 1, 20, watch.distanceKm);
+          stats.facebookReturned += fbItems.length;
+          for (const item of fbItems) byUrl.set(item.url, item);
         }
       } catch (error) {
         lines.push(`⚠️ ${watch.name}: ${term} failed (${error instanceof Error ? error.message : String(error)})`);
@@ -80,9 +122,12 @@ async function main(): Promise<void> {
     const fresh = items.length - cachedHits;
     const watchCacheEntries = store.entries().filter((entry) => entry.watchName === watch.name);
     const watchCacheAdded24h = watchCacheEntries.filter((entry) => entry.seenAt >= sinceMs).length;
+    const ignored = stats.droppedKeyword + stats.droppedArea + stats.droppedAge;
     lines.push(`Watch: ${watch.name}`);
     lines.push(`Terms: ${watch.terms.join(", ")}`);
     lines.push(`Distance: ${watch.distanceKm} km`);
+    lines.push(`Scanned: ${stats.gumtreeScanned} Gumtree${stats.facebookReturned > 0 ? ` + ${stats.facebookReturned} Facebook` : ""}`);
+    lines.push(`Ignored: ${ignored} (keyword ${stats.droppedKeyword}, out of area ${stats.droppedArea}, over 24h ${stats.droppedAge})`);
     lines.push(`Found live last 24h: ${items.length}`);
     if (ruleFiltered > 0) lines.push(`Filtered by rules: ${ruleFiltered}`);
     lines.push(`New right now: ${fresh}`);

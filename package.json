@@ -12,7 +12,7 @@
     "daily-summary": "tsx bin/daily-summary.ts",
     "history": "tsx bin/history.ts",
     "guard:routines": "bash scripts/routine-parent-guard.sh",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-browser-modules.mjs",
     "start": "node dist/index.js",
     "start:once": "node dist/run-once.js",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",

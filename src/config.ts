@@ -11,6 +11,9 @@ const envSchema = z.object({
   WHATSAPP_ALERT_WEBHOOK_TOKEN: z.string().trim().optional(),
   OPENCLAW_GATEWAY_TOKEN: z.string().trim().optional(),
   OPENCLAW_TOOL_URL: z.string().trim().default("http://127.0.0.1:28889/tools/invoke"),
+  WINDOWS_BROWSER_URL: z.string().url().optional(),
+  WINDOWS_BROWSER_TOKEN: z.string().trim().optional(),
+  WINDOWS_BROWSER_AUTOSTART_COMMAND: z.string().trim().default('/mnt/c/Windows/System32/schtasks.exe /Run /TN WindowsBrowser'),
   BROWSER_WORKER_URL: z.string().trim().default("http://100.95.126.123:3877"),
   BROWSER_WORKER_TOKEN: z.string().trim().optional(),
   BROWSER_WORKER_AUTOSTART_ENABLED: z
@@ -253,10 +256,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     openclawGatewayToken: parsed.OPENCLAW_GATEWAY_TOKEN,
     openclawToolUrl: parsed.OPENCLAW_TOOL_URL,
     dryRun: parsed.DRY_RUN ?? false,
-    browserWorkerUrl: parsed.BROWSER_WORKER_URL,
-    browserWorkerToken: parsed.BROWSER_WORKER_TOKEN,
+    browserWorkerUrl: parsed.WINDOWS_BROWSER_URL || parsed.BROWSER_WORKER_URL,
+    browserWorkerToken: parsed.WINDOWS_BROWSER_TOKEN || parsed.BROWSER_WORKER_TOKEN,
     browserWorkerAutostartEnabled: parsed.BROWSER_WORKER_AUTOSTART_ENABLED,
-    browserWorkerAutostartCommand: parsed.BROWSER_WORKER_AUTOSTART_COMMAND,
+    browserWorkerAutostartCommand: parsed.WINDOWS_BROWSER_URL
+      ? parsed.WINDOWS_BROWSER_AUTOSTART_COMMAND
+      : parsed.BROWSER_WORKER_AUTOSTART_COMMAND,
     browserWorkerHealthTimeoutMs: parsed.BROWSER_WORKER_HEALTH_TIMEOUT_MS,
     browserWorkerStartupTimeoutMs: parsed.BROWSER_WORKER_STARTUP_TIMEOUT_MS,
     browserWorkerRestartCooldownMs: parsed.BROWSER_WORKER_RESTART_COOLDOWN_MS,

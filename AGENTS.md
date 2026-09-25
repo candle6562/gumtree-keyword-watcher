@@ -7,7 +7,9 @@ Market watch bot for WhatsApp alerts.
 - Mounted in OpenClaw container at: `/opt/gumtree-keyword-watcher`
 - Cron wrappers live in: `/git/agent-infra/gumtree-keyword-watcher/`
 - OpenClaw routing docs live in: `/git/openclaw-data/workspace/TOOLS.md` and `/git/openclaw-data/workspace/skills/market-watch/SKILL.md`
-- Facebook scraper worker lives on Windows at: `/mnt/c/fb-browser-worker`
+- Legacy Facebook scraper worker lives on Windows at: `/mnt/c/fb-browser-worker`
+- New generic Windows Browser: `/mnt/c/windows-browser`, source `/git/agent-infra/windows-browser`, port 3878. Opt-in only; production is not switched.
+- Marketplace logic now also lives in `src/marketplace-browser/`. See `docs/windows-browser.md` for migration, login blocker and read-only smoke command.
 
 ## Source of truth
 Use `config/watches.json` for watches.

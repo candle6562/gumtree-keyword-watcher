@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { marketplaceRequest } from "./marketplace-browser/request.js";
 import { basename, dirname, join } from "node:path";
 import type { AppConfig } from "./config.js";
 import type { Listing } from "./types.js";
@@ -104,7 +105,7 @@ export async function fetchFacebookDetail(
   config: DetailConfig,
   listing: Listing
 ): Promise<ListingDetail> {
-  const response = await fetch(`${config.browserWorkerUrl.replace(/\/$/, "")}/marketplace/detail`, {
+  const response = await marketplaceRequest(`${config.browserWorkerUrl.replace(/\/$/, "")}/marketplace/detail`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${config.browserWorkerToken}`,

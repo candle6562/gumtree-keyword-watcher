@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import "dotenv/config";
+import { marketplaceRequest } from "../src/marketplace-browser/request.js";
 import { loadConfig } from "../src/config.js";
 import { fetchGumtreeHtml, parseGumtreeResults } from "../src/gumtree.js";
 import { matchListings } from "../src/matcher.js";
@@ -107,7 +108,7 @@ async function searchFacebook(config: ReturnType<typeof loadConfig>, term: strin
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.httpTimeoutMs);
   try {
-    const response = await fetch(`${config.browserWorkerUrl.replace(/\/$/, "")}/marketplace/search`, {
+    const response = await marketplaceRequest(`${config.browserWorkerUrl.replace(/\/$/, "")}/marketplace/search`, {
       method: "POST",
       signal: controller.signal,
       headers: {

@@ -1,3 +1,4 @@
+import { marketplaceRequest } from "./marketplace-browser/request.js";
 import type { AppConfig } from "./config.js";
 import type { Listing } from "./types.js";
 
@@ -85,7 +86,7 @@ export async function searchFacebookMarketplaceDetailed(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.httpTimeoutMs);
   try {
-    const response = await fetch(`${config.browserWorkerUrl.replace(/\/$/, "")}/marketplace/search`, {
+    const response = await marketplaceRequest(`${config.browserWorkerUrl.replace(/\/$/, "")}/marketplace/search`, {
       method: "POST",
       signal: controller.signal,
       headers: {
